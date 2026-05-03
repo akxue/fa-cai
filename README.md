@@ -2,7 +2,7 @@
 
 facai (發財) is a solo roguelike mahjong game concept. The player races three AI opponents to complete a valid Hong Kong mahjong hand, then builds momentum across a short tournament by collecting rule-bending boons.
 
-The current repository is in the design stage. It contains the initial game design document and does not yet include a playable prototype or build system.
+The current repository is in the design/planning stage. It contains the initial game design document and Milestone 1 build plan. It does not yet include a playable prototype or build system.
 
 ## Concept
 
@@ -39,7 +39,8 @@ Deferred features include art, classes, overworld routing, relics, boss auras, c
 ```text
 .
 ├── docs/
-│   └── INITIAL-DESIGN.md
+│   ├── INITIAL-DESIGN.md
+│   └── MILESTONE-1-PLAN.md
 └── README.md
 ```
 
@@ -57,12 +58,23 @@ Start with [docs/INITIAL-DESIGN.md](docs/INITIAL-DESIGN.md). It covers:
 - Deferred features
 - Open questions
 
+Then read [docs/MILESTONE-1-PLAN.md](docs/MILESTONE-1-PLAN.md). It covers the first playable build slice:
+
+- Engine and tooling
+- Repository shape
+- Domain model
+- Rules/scoring implementation decisions
+- Effect system
+- Milestone 1 acceptance scope
+
 ## Status
 
 This project is not yet implemented. There are currently no dependencies to install, tests to run, or executable commands.
 
 ## Working Notes
 
-The first engineering milestone should be a minimal playable prototype that answers one question:
+The broader Phase 0 prototype should answer one question:
 
 > Is racing three opponents to Hu, under the minimum fan rule, with an accumulating boon stack, fun enough to keep playing?
+
+Milestone 1 is the first slice toward that answer: Round 1 only, one starter boon, vanilla opponents, and a reward screen after the player wins.

@@ -1,6 +1,6 @@
 # facai (發財) — Game Design Document v4.1
 
-> Last updated: May 2026. Share-ready pass. This document describes the intended game, the Phase 0 prototype, and the current design assumptions. Anything unresolved is listed under Open Questions.
+> Last updated: May 2026. Share-ready pass. This document describes the intended game, the broader Phase 0 prototype target, and the current design assumptions. Milestone-specific build scope lives in separate milestone plans.
 
 ---
 
@@ -38,17 +38,21 @@ The game should expose enough information to make decisions feel fair: visible o
 
 The long-term version of facai is a compact, highly replayable roguelike built on mahjong fundamentals. A full run should eventually support a larger boon pool, stronger opponent identities, rarer build-defining effects, mastery ratings, unlocks, and possibly later layers such as classes, relics, boss auras, overworld routing, or co-op.
 
-Those layers are intentionally deferred. The first milestone is not "all of roguelike mahjong." The first milestone is proving that **racing three opponents to a 3+ fan Hu, while accumulating a small stack of boons, is fun enough to replay.**
+Those layers are intentionally deferred. The broader Phase 0 target is not "all of roguelike mahjong." The first implementation milestone is even smaller: prove that **racing three opponents to a 3+ fan Hu, with one starter boon and a readable reward beat, is fun enough to keep building.**
 
 ---
 
 ## Phase 0 Prototype
 
-Phase 0 is the smallest version that can validate the core promise.
+Phase 0 is the broader prototype target that can validate the core promise across a complete five-round tournament.
 
 Solo player. Standard 136-tile Wall. Full HK mahjong rules (Chi, Peng, Gang, Hu, Zi Mo). Minimum 3 fan required to Hu for every player. Five tournament rounds. Three lives. Gate-style structure: losing a hand costs 1 life and retries the same round; winning a hand advances to the next round. Choose 1 starter boon from a curated entry set before Round 1, then choose a boon from the full Phase 0 pool after clearing Rounds 1-4 (3 options; 4 on Zi Mo win). Three AI opponents play vanilla mahjong in Round 1, then escalate through visible scripted packages and declared targets. Scoring is presented as C/B/A/S/SS/Legend ratings instead of point totals. No art. No classes. No overworld. No co-op.
 
 **The single question Phase 0 answers:** Is racing three opponents to Hu, under the minimum fan rule, with an accumulating boon stack, fun enough to keep playing?
+
+### Milestone 1 Slice
+
+Milestone 1 is the first playable build slice of Phase 0, not the whole Phase 0 prototype. It implements Round 1 only: choose 1 starter boon from 3 curated offers, play against 3 vanilla AI opponents, win the deal to see a reward screen, or lose 1 life and retry Round 1. Round 2+, the full 12-boon reward pool, and scripted opponent packages are Phase 0 follow-up work after the first slice is playable.
 
 ---
 
@@ -247,7 +251,7 @@ These Phase 0 boons are excluded from starter offers:
 | Stolen Thunder | Too rare and reactive for a first impression |
 | Compounding Interest | Does nothing until after the player has won a round |
 
-After Round 1, boon rewards draw from the full 12-boon Phase 0 pool.
+In the full Phase 0 prototype, boon rewards after Round 1 draw from the full 12-boon Phase 0 pool. Milestone 1 may reuse the curated starter set for its single reward screen because Round 2+ is outside that first build slice.
 
 ---
 
@@ -282,7 +286,7 @@ Opponent packages should be displayed before the hand starts and remain inspecta
 
 Boons are organized by archetype (design reference only) and tier. Tier 1 boons fire on guaranteed triggers, low ceiling, always useful. Tier 2 fire on conditional triggers, higher ceiling. Tier 3 are build-warping, can be weak alone, devastating in combination.
 
-Only the 12 boons listed in **Phase 0 Boon Pool** are required for the first prototype. Other boons in this catalog are future candidates.
+Only the 12 boons listed in **Phase 0 Boon Pool** are required for the broader Phase 0 prototype. Milestone 1 implements the curated starter set first. Other boons in this catalog are future candidates.
 
 ---
 
