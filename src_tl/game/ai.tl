@@ -66,16 +66,6 @@ function M.compute_live_counts(deal: DealState, player_index: integer): {string:
    return live
 end
 
--- Apply a hypothetical "I will discard this tile" to live counts: the tile
--- moves from concealed to the discard pile, so its live count drops by 1.
-local function live_after_discard(live: {string:integer}, kind: TileKindId): {string:integer}
-   local out: {string:integer} = {}
-   for k, v in pairs(live) do out[k] = v end
-   local s = kind as string
-   out[s] = (out[s] or 0) - 1
-   return out
-end
-
 -- ── Score-context builder ──────────────────────────────────────────────────
 -- Mirrors deal_engine.build_score_ctx so AI Hu legality matches the engine
 -- exactly. is_men_qian is derived from open-set visibility.
@@ -370,23 +360,15 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       end
    elseif deal.has_pending_kong then
       if player_index ~= deal.pending_added_kong.declarer then
-         local declarer = deal.pending_added_kong.declarer
-         local kong_tile_id = deal.pending_added_kong.tile_id
-         local declarer_concealed = deal.players[declarer].hand.concealed_tiles
-         local kong_tile: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
-         for _, t in ipairs(declarer_concealed) do
-            if t.tile_id == kong_tile_id then kong_tile = t; break end
-         end
-         if (kong_tile.tile_id as string) ~= "" then
-            local ok, _final = evaluate_hu(deal, player_index, concealed, kong_tile, false, false, true)
-            if ok then
-               return engine.declare_hu(player_index, kong_tile_id, false), {
-                  tag         = "hu_on_discard",
-                  message     = "qiang gang on " .. (kong_tile.kind_id as string),
-                  ting_before = NA,
-                  ting_after  = NA,
-               }
-            end
+         local kong_tile = deal.pending_added_kong.tile
+         local ok, _final = evaluate_hu(deal, player_index, concealed, kong_tile, false, false, true)
+         if ok then
+            return engine.declare_hu(player_index, deal.pending_added_kong.tile_id, false), {
+               tag         = "hu_on_discard",
+               message     = "qiang gang on " .. (kong_tile.kind_id as string),
+               ting_before = NA,
+               ting_after  = NA,
+            }
          end
       end
       -- No legal Peng/Chi/Open Kong on a pending added kong.

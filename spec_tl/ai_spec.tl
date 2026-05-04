@@ -65,7 +65,11 @@ local function make_deal(
       round_wind               = "east" as Wind,
       pending_discard          = { tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }, discarder = 0 },
       has_pending_discard      = false,
-      pending_added_kong       = { tile_id = "" as TileId, declarer = 0 },
+      pending_added_kong       = {
+         tile_id  = "" as TileId,
+         tile     = { tile_id = "" as TileId, kind_id = "" as TileKindId },
+         declarer = 0,
+      },
       has_pending_kong         = false,
       known_wall_tile_ids      = {},
       rng                      = rng_mod.from_seed(1),

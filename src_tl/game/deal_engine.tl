@@ -259,7 +259,11 @@ local function empty_pending_discard(): PendingDiscard
 end
 
 local function empty_pending_kong(): PendingAddedKong
-   return { tile_id = "" as TileId, declarer = 0 }
+   return {
+      tile_id  = "" as TileId,
+      tile     = { tile_id = "" as TileId, kind_id = "" as TileKindId },
+      declarer = 0,
+   }
 end
 
 -- ── Wall exhaustion ────────────────────────────────────────────────────────
@@ -617,11 +621,9 @@ end
 local function apply_qiang_gang(d: DealState, winner_index: integer): DealTransition
    local validator = require("game.hand_validator")
    local p         = d.players[winner_index]
-   local declarer  = d.pending_added_kong.declarer
-   local kong_tile, kt_ok = find_tile(d.players[declarer].hand.concealed_tiles, d.pending_added_kong.tile_id)
-   if not kt_ok then return err(d, "resolve: pending kong tile lost") end
-   local ctx      = build_score_ctx(d, winner_index, false, false, true)
-   local shapes   = validator.find_win_shapes(p.hand.concealed_tiles, kong_tile, p.hand.sets)
+   local kong_tile = d.pending_added_kong.tile
+   local ctx       = build_score_ctx(d, winner_index, false, false, true)
+   local shapes    = validator.find_win_shapes(p.hand.concealed_tiles, kong_tile, p.hand.sets)
    local output   = scorer_mod.score_hand(shapes, ctx)
    if not output.has_best then
       return err(d, "resolve: qiang gang no longer valid")
@@ -917,9 +919,7 @@ local function handle_hu(deal: DealState, action: DeclareHuAction): DealTransiti
          return err(deal, "qiang gang: cannot rob own kong")
       end
       local p        = deal.players[action.player_index]
-      local declarer = deal.pending_added_kong.declarer
-      local kong_tile, kt_ok = find_tile(deal.players[declarer].hand.concealed_tiles, deal.pending_added_kong.tile_id)
-      if not kt_ok then return err(deal, "qiang gang: pending kong tile not found") end
+      local kong_tile = deal.pending_added_kong.tile
       local ctx    = build_score_ctx(deal, action.player_index, false, false, true)
       local shapes = require("game.hand_validator").find_win_shapes(p.hand.concealed_tiles, kong_tile, p.hand.sets)
       local output = scorer_mod.score_hand(shapes, ctx)
@@ -1113,7 +1113,7 @@ local function handle_added_kong(deal: DealState, action: DeclareAddedKongAction
 
    -- The fourth tile stays in concealed tiles until the Qiang Gang window resolves.
    local d = copy_deal(deal)
-   d.pending_added_kong = { tile_id = action.tile_id, declarer = action.player_index }
+   d.pending_added_kong = { tile_id = action.tile_id, tile = tile_obj, declarer = action.player_index }
    d.has_pending_kong   = true
    d.reaction_passes    = {}
    d.pending_claims     = {}
