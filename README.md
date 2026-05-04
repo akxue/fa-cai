@@ -38,7 +38,14 @@ Deferred features include art, classes, overworld routing, relics, boss auras, c
 
 ```text
 .
+├── AGENTS.md
+├── CLAUDE.md
+├── .github/
+│   └── pull_request_template.md
 ├── docs/
+│   ├── AGENT-ROLES.md
+│   ├── DECISIONS.md
+│   ├── DEVELOPMENT-WORKFLOW.md
 │   ├── INITIAL-DESIGN.md
 │   └── MILESTONE-1-PLAN.md
 └── README.md
@@ -65,7 +72,13 @@ Then read [docs/MILESTONE-1-PLAN.md](docs/MILESTONE-1-PLAN.md). It covers the fi
 - Domain model
 - Rules/scoring implementation decisions
 - Effect system
-- Milestone 1 acceptance scope
+- Milestone 1 slices, tasks, and acceptance scope
+
+Durable architecture, rules, and workflow decisions are tracked in [docs/DECISIONS.md](docs/DECISIONS.md).
+
+Agent-facing guidance lives in [AGENTS.md](AGENTS.md). Codex reads that file directly; [CLAUDE.md](CLAUDE.md) imports it so Claude Code uses the same shared instructions. Dedicated agent responsibility lanes are described in [docs/AGENT-ROLES.md](docs/AGENT-ROLES.md).
+
+Development should happen through small PRs with human review. See [docs/DEVELOPMENT-WORKFLOW.md](docs/DEVELOPMENT-WORKFLOW.md) for branch, PR, review, and future CI expectations.
 
 ## Status
 

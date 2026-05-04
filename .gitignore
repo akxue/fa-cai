@@ -1,0 +1,21 @@
+# Generated Teal output
+/src/
+/spec/
+
+# LÖVE packaged builds
+*.love
+
+# Lua tooling
+luarocks/
+lua_modules/
+
+# macOS
+.DS_Store
+
+# Local editor/project files
+.vscode/
+.idea/
+
+# Local-only agent notes
+CLAUDE.local.md
+AGENTS.override.md

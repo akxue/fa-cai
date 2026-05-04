@@ -12,6 +12,78 @@ The architecture should support the long-term vision: more boons, relics, classe
 
 Milestone 1 is the first implementation slice of the broader Phase 0 prototype described in `docs/INITIAL-DESIGN.md`. Phase 0 still describes the larger five-round prototype target; this plan describes the one-round build needed first.
 
+## Milestone Goal
+
+Milestone 1 should produce a one-round playable vertical slice that proves the rules engine, boon/effect architecture, AI action path, and minimal LÖVE UI can all work together.
+
+The player should be able to start a run, choose one starter boon, play Round 1 against three vanilla AI opponents, win to reach a reward screen, or lose lives and retry Round 1.
+
+## Definition Of Done
+
+Milestone 1 is done when:
+
+- `make check`, `make build`, and `make test` exist and pass.
+- The game launches in LÖVE through `make run`.
+- A player can complete Round 1 from starter boon selection to win reward or run loss.
+- Draw, discard, Chi, Peng, Kong, Hu, Pass, Zi Mo, Gang Shang, and Qiang Gang are implemented for Milestone 1 scope.
+- Hand validation, scoring, rating, and 3 fan minimum work for all listed Milestone 1 patterns.
+- The seven starter boons are implemented through the typed effect system.
+- AI opponents use the same `DealAction` path as the player.
+- Tile conservation passes at every deal transition in tests and debug UI.
+- Debug UI exposes seeds, wall count, pending reactions, score candidates, AI reasoning, Known Wall, and invariant status.
+- Generated Lua in `src/` and generated specs in `spec/` are ignored and not committed.
+
+## Product Scope
+
+In scope:
+
+- Round 1 only
+- 3 lives
+- starter boon selection from curated offers
+- vanilla AI opponents
+- minimal readable LÖVE UI
+- debug inspector
+- reward screen after a Round 1 win
+- deterministic rules engine and tests
+
+Out of scope:
+
+- Round 2+
+- full five-round tournament completion
+- full opponent scripted packages
+- defensive AI
+- multiplayer
+- animation polish
+- tutorial
+- Steam/export pipeline
+
+## Work Breakdown Rules
+
+Use the hierarchy:
+
+```text
+Milestone 1
+  Slice Sxx
+    Task Txx
+```
+
+Each slice must be independently reviewable and should leave the repo in a working state. Each implementation PR should reference exactly one slice and one or more tasks from this plan.
+
+Task statuses:
+
+- `pending`: not started
+- `in_progress`: active branch/PR exists
+- `done`: merged and verified
+- `blocked`: cannot continue without a decision or dependency
+
+Before starting a task, confirm:
+
+- the slice goal
+- owned files/modules
+- acceptance criteria
+- verification commands
+- whether `docs/DECISIONS.md` needs a new entry
+
 ---
 
 ## Engine and Tooling
@@ -77,7 +149,9 @@ src_tl/
   game/
     tiles.tl
     wall.tl
+    deal_types.tl
     hand_validator.tl
+    ting_distance.tl
     scorer.tl
     calls.tl
     deal_engine.tl
@@ -124,6 +198,7 @@ spec_tl/
     assertions.tl
   wall_spec.tl
   hand_validator_spec.tl
+  ting_distance_spec.tl
   scorer_spec.tl
   calls_spec.tl
   effects_spec.tl
@@ -165,6 +240,8 @@ Use these terms consistently in code and docs:
 - **Deal:** one mahjong deal/attempt inside a round
 - **PlayerHand:** one player's concealed tiles and declared sets
 - **TileSet:** Chi/Peng/Kong group
+- **Ting / Ting Pai (聽牌):** a hand that needs exactly one more tile to form a valid Hu. Use `ting` in code. Do not use `tenpai`.
+- **Ting Distance:** the number of tiles needed to reach ting. −1 = already ting. 0 = one tile away from ting. Use `ting_distance` in code. Do not use `shanten`.
 - **Known Wall:** wall tiles that are still physically in the Wall but are known to the player through an information effect
 - **Concealed / Men Qian:** no open TileSets; a winning discard can still be the incoming tile for a concealed win
 
@@ -285,6 +362,13 @@ record DealState
   known_wall_tile_ids: {TileId}
   effect_states: {ActiveEffectState}
   rng: RngState
+  deal_result: DealResult?  -- populated when phase = "deal_over", nil otherwise
+end
+
+record DealResult
+  winner_player_index: integer?  -- nil = wall exhaustion, no winner
+  won_by_zi_mo: boolean
+  score_result: ScoreResult?     -- nil if wall exhaustion
 end
 ```
 
@@ -352,6 +436,7 @@ Rules:
 - Fresh Start reshuffles the Wall, so it clears `known_wall_tile_ids`.
 - Known Wall tracks normal front-Wall tiles only in Milestone 1.
 - Known information persists in the UI; the player should not need to memorize peeked tiles.
+- Boundary rule: if the Wall has fewer tiles remaining than an effect's requested reveal count, populate `known_wall_tile_ids` with all remaining front-Wall tiles. Never error on a short wall.
 
 ---
 
@@ -365,14 +450,31 @@ Expected API:
 
 ```lua
 record RngState
-  state: integer
+  state: integer      -- must be non-zero; guard in from_seed
+end
+
+record RngIntResult
+  value: integer
+  rng: RngState       -- next state; callers must use this, not the input rng
+end
+
+record RngShuffleTilesResult
+  tiles: {Tile}
+  rng: RngState
 end
 
 function from_seed(seed: integer): RngState
+-- Returns new state and next u32. Does NOT mutate the input.
 function next_u32(rng: RngState): RngIntResult
+-- Returns new state and integer in [min_value, max_value].
 function next_int(rng: RngState, min_value: integer, max_value: integer): RngIntResult
+-- Returns shuffled copy and new state. Input tiles are not mutated.
 function shuffle_tiles(rng: RngState, tiles: {Tile}): RngShuffleTilesResult
 ```
+
+All functions are pure — no input is mutated. Callers must replace their `rng` binding with
+`result.rng` after every call. `DealState.rng` and `RunState.rng` are updated through the
+transition return path, not direct mutation.
 
 Use a small deterministic PRNG such as xorshift32. Guard against zero seed.
 
@@ -400,11 +502,14 @@ type DealPhase =
 
 Opening flow:
 
-1. Deal 13 tiles to each player.
-2. Apply opening modifiers, such as Momentum, to the owning player.
-3. Fresh Start may swap 0-3 tiles.
-4. Player trims to 13 if needed.
-5. Normal play begins.
+1. Deal 13 tiles to each player from the shuffled Wall.
+2. Fire `collect_opening_modifiers` query across all active effects.
+3. Apply extra tile deals in priority order (passive opening modifiers that expand the opening draw).
+4. Player trims to 13 by discarding extras into an `opening_trim` zone — not the table discard pile. Tile conservation must account for `opening_trim` tiles.
+5. Fire opening active effects in priority order (active opening effects that let the player make choices, such as swapping tiles).
+6. Normal play begins.
+
+Ordering rationale: passive opening modifiers (automatic tile additions) resolve before active opening effects (player-driven choices) so that any automatic hand expansion is visible before the player makes active opening decisions.
 
 Turn flow:
 
@@ -467,6 +572,7 @@ Rules:
 - Gang Shang applies if the player wins on the supplement tile.
 - Qiang Gang only applies to added Kong.
 - Concealed Kong and open Kong from discard cannot be robbed in Phase 0.
+- Multiple Kongs in one turn: each added Kong opens its own Qiang Gang reaction window before its supplement draw. A concealed Kong declared during a turn (including after a supplement draw) does not open a Qiang Gang window. After all Kong declarations and reaction windows resolve, the player draws the final supplement tile and proceeds to `awaiting_action`. If the Wall has no supplement tiles when a Kong supplement is needed, the deal ends as wall exhaustion before the Kong resolves.
 
 Reaction priority:
 
@@ -540,6 +646,32 @@ Score reason categories:
 "limit"
 ```
 
+Score reason and result types:
+
+```lua
+type ScoreReasonCategory = "hand_pattern" | "modifier" | "boon" | "limit"
+
+record ScoreReason
+  category: ScoreReasonCategory
+  label: string             -- human-readable, e.g. "Qing Yi Se" or "Zi Mo"
+  fan: integer              -- 0 for limit entries
+  is_limit: boolean
+end
+
+record ScoreResult
+  win_shape_kind: WinShapeKind
+  reasons: {ScoreReason}
+  total_fan: integer        -- sum of reason.fan; irrelevant when is_limit = true
+  is_limit: boolean
+  rating: Rating
+  valid_hu: boolean         -- true if is_limit or total_fan >= 3
+end
+
+type Rating = "C" | "B" | "A" | "S" | "SS" | "Legend"
+```
+
+The scorer returns `{ScoreResult}` — one per valid win shape candidate. The engine picks the best.
+
 Rating is derived only at the end.
 
 Milestone 1 uses the initial non-limit fan-to-rating curve from `docs/INITIAL-DESIGN.md`. Tune after playtesting if the curve makes ordinary wins feel too flat or limit hands feel insufficiently distinct.
@@ -550,6 +682,7 @@ Milestone 1 uses the initial non-limit fan-to-rating curve from `docs/INITIAL-DE
 - Ping Hu must be a standard shape made of four Chi plus a non-honor pair.
 - Ping Hu can stack with Qing Yi Se.
 - Seven Pairs can include honors and mixed suits.
+- Seven Pairs requires exactly seven distinct tile kinds — two pairs of the same tile are not valid. The validator must verify all seven pair `tile_kind_id`s are unique.
 - Seven Pairs can stack with Hun Yi Se or Qing Yi Se.
 - Hun Yi Se = exactly one numbered suit plus one or more honors.
 - Qing Yi Se = exactly one numbered suit and no honors.
@@ -631,6 +764,62 @@ Initial command vocabulary:
 "add_log"
 ```
 
+Command record types (all carry a `command_kind` discriminant; the engine dispatches on it):
+
+```lua
+type EffectCommandKind =
+  "increment_counter"
+  | "set_counter"
+  | "mark_used"
+  | "reveal_wall_front"
+  | "replace_concealed_tiles"
+  | "add_log"
+
+record IncrementCounterCommand
+  command_kind: string          -- "increment_counter"
+  active_effect_id: string
+  counter_key: string
+  delta: integer
+end
+
+record SetCounterCommand
+  command_kind: string          -- "set_counter"
+  active_effect_id: string
+  counter_key: string
+  value: integer
+end
+
+record MarkUsedCommand
+  command_kind: string          -- "mark_used"
+  active_effect_id: string
+end
+
+record RevealWallFrontCommand
+  command_kind: string          -- "reveal_wall_front"
+  count: integer                -- tiles to add to known_wall_tile_ids
+end
+
+record ReplaceConcealedTilesCommand
+  command_kind: string          -- "replace_concealed_tiles"
+  player_index: integer
+  tile_ids_to_remove: {TileId}  -- engine draws replacements from wall
+  reshuffle_wall: boolean       -- when true, Wall is reshuffled after replacement draws
+end
+
+record AddLogCommand
+  command_kind: string          -- "add_log"
+  message: string
+end
+
+type EffectCommand =
+  IncrementCounterCommand
+  | SetCounterCommand
+  | MarkUsedCommand
+  | RevealWallFrontCommand
+  | ReplaceConcealedTilesCommand
+  | AddLogCommand
+```
+
 Effects should not issue generic draw commands in Milestone 1. Use constrained commands or queries.
 
 ### Effect Ordering
@@ -681,23 +870,56 @@ Initial boon behavior:
 
 ## AI Scope
 
-Milestone 1 AI is not defensive.
+Milestone 1 AI is vanilla: no defensive play, no opponent modeling, no package behavior.
 
-AI must:
+### Heuristic Algorithm
 
-- draw
-- discard
-- Hu using the same validator/scorer as the player
-- react to discards with Hu/Peng/Kong/Chi where legal
-- choose calls conservatively
-- understand the 3 fan minimum enough to avoid nonsense calls
+The AI uses a ting-distance-based heuristic. Ting distance is the number of tiles needed to reach ting (−1 = already ting, 0 = one tile away from ting). See Core Vocabulary.
 
-AI hidden information:
+**Discard selection:**
+1. For each tile in the concealed hand, compute the ting distance of the remaining hand across all applicable win shapes (standard, seven pairs, thirteen orphans).
+2. Discard the tile that minimizes ting distance after removal.
+3. Tiebreak: prefer to discard honor tiles, then terminals, then by `tile_kind_id` for determinism.
 
-- AI concealed tiles are hidden in normal UI.
-- Debug Inspector can reveal AI hands.
+**Hu decision:**
+- Call the scorer on the current hand + incoming tile.
+- If `score_result.valid_hu = true`, declare Hu immediately.
 
-AI always Hu at 3+ fan in Milestone 1.
+**Call decision (Chi / Peng / open Kong):**
+1. Compute ting distance of the hand if the call is made.
+2. Make the call only if: (a) ting distance decreases, AND (b) the resulting open hand can plausibly reach ≥ 3 fan. Use a simple fan-floor check: if current fan potential with open sets is below 2 and no honor tiles remain, pass.
+3. Never call Chi if it would break a lower-ting-distance path already available.
+4. Prefer Peng over Chi when both reduce ting distance equally.
+
+**Concealed / added Kong decision:**
+- Declare only if it does not increase ting distance.
+
+**AI always Hus at 3+ fan.** Uses the same scorer call as the player.
+
+### Ting Distance Calculator
+
+Implement `game/ting_distance.tl`. Expose:
+
+```lua
+function ting_distance_standard(concealed_tiles: {Tile}, open_sets: {TileSet}): integer
+function ting_distance_seven_pairs(concealed_tiles: {Tile}): integer
+function ting_distance_thirteen_orphans(concealed_tiles: {Tile}): integer
+-- Returns min across all applicable shapes.
+function ting_distance(concealed_tiles: {Tile}, open_sets: {TileSet}): integer
+```
+
+`ting_distance.tl` must be pure and must not import `love` or `ai.tl`. Add `spec_tl/ting_distance_spec.tl` in `S02` alongside validation tests.
+
+### Debug Output
+
+For each AI discard, emit an `AddLogCommand` with:
+- the discarded tile
+- the ting distance before and after
+- the win shape target
+
+### Hidden Information
+
+AI concealed tiles are hidden in normal Dev Mode. The debug inspector reveals them. AI must not read `known_wall_tile_ids` — that field is player-only information.
 
 ---
 
@@ -716,6 +938,94 @@ record DealTransition
   events: {DealEvent}
   error: string?
 end
+```
+
+Action types (define in `game/deal_types.tl`):
+
+```lua
+type DealActionKind =
+  "draw"
+  | "discard"
+  | "declare_hu"
+  | "declare_chi"
+  | "declare_peng"
+  | "declare_open_kong"
+  | "declare_concealed_kong"
+  | "declare_added_kong"
+  | "pass_reaction"
+  | "use_effect_action"
+
+record DrawAction
+  kind: string          -- "draw"
+  player_index: integer
+end
+
+record DiscardAction
+  kind: string          -- "discard"
+  player_index: integer
+  tile_id: TileId
+end
+
+record DeclareHuAction
+  kind: string          -- "declare_hu"
+  player_index: integer
+  incoming_tile_id: TileId?  -- nil for Zi Mo (tile is already in concealed_tiles)
+end
+
+record DeclareChiAction
+  kind: string          -- "declare_chi"
+  player_index: integer
+  tile_id: TileId            -- the discarded tile being claimed
+  other_tile_ids: {TileId}   -- the two concealed tiles completing the Chi
+end
+
+record DeclarePengAction
+  kind: string          -- "declare_peng"
+  player_index: integer
+  tile_id: TileId
+end
+
+record DeclareOpenKongAction
+  kind: string          -- "declare_open_kong"
+  player_index: integer
+  tile_id: TileId
+end
+
+record DeclareConcealedKongAction
+  kind: string          -- "declare_concealed_kong"
+  player_index: integer
+  tile_kind_id: TileKindId   -- the four concealed tiles of this kind
+end
+
+record DeclareAddedKongAction
+  kind: string          -- "declare_added_kong"
+  player_index: integer
+  tile_id: TileId            -- the fourth tile being added to an open Peng
+end
+
+record PassReactionAction
+  kind: string          -- "pass_reaction"
+  player_index: integer
+end
+
+record UseEffectAction
+  kind: string          -- "use_effect_action"
+  player_index: integer
+  active_effect_id: string
+  payload: any?              -- effect-specific params; effects validate this
+end
+
+type DealAction =
+  DrawAction
+  | DiscardAction
+  | DeclareHuAction
+  | DeclareChiAction
+  | DeclarePengAction
+  | DeclareOpenKongAction
+  | DeclareConcealedKongAction
+  | DeclareAddedKongAction
+  | PassReactionAction
+  | UseEffectAction
 ```
 
 Structured `DealEvent`s are canonical. Simple debug log strings are acceptable in Milestone 1, but UI text should eventually render from structured events.
@@ -817,103 +1127,467 @@ Start notation helpers in tests. They may move into dev/debug tooling later.
 
 ---
 
-## Milestones
+## Milestone 1 Slices
 
-### Milestone 0: Foundation
+### S00: Toolchain And Repo Skeleton
 
-Goal: make the project safe for AI-agent-coded development before gameplay UI.
+Status: `pending`
 
-Deliverables:
+Goal: make the project safe for AI-agent-coded development before gameplay implementation.
 
-- LÖVE app boots to minimal debug screen.
-- Teal build pipeline works.
-- `tl check` runs cleanly.
-- busted tests compile and run.
-- Generated Lua is ignored.
-- README documents install/build/test/run commands.
-- `core/types.tl` defines the domain model.
-- `core/rng.tl` implements deterministic RNG.
-- `game/tiles.tl` creates the 34 tile kinds / 136 physical tiles.
-- `game/wall.tl` supports seeded shuffle, front draw, back draw, reveal, return-and-shuffle.
-- Test hand notation helper exists.
-- Initial tests cover tiles, wall, RNG, and notation.
+Why this comes now: every later slice depends on boring, repeatable typecheck/build/test commands.
 
-### Milestone 1A: Rules Engine
+Owned areas:
 
-- PlayerHand / TileSet operations.
-- Full win-shape validator.
-- Full listed hand pattern detection.
-- Scorer with ratings, reasons, 3 fan minimum, and all candidates.
-- Call legality including Chi/Peng/Kong.
-- Reaction priority.
-- Tile conservation invariant checks.
-- Tests for scoring, validation, calls, and invariants.
+- `Makefile`
+- `tlconfig.lua`
+- `.gitignore`
+- `src_tl/`
+- `spec_tl/`
+- `README.md`
 
-### Milestone 1B: Deal Engine + Debug UI
+Tasks:
 
-- Deal state machine.
-- Draw/discard flow.
-- Reaction windows.
-- Kong supplement flow.
-- Qiang Gang flow.
-- Win/loss deal result.
-- Vanilla AI.
-- Debug UI to inspect game state.
+- `T01`: Add Teal, LÖVE, and busted project scaffolding.
+- `T02`: Add `make check`, `make build`, `make test`, `make run`, and `make clean`.
+- `T03`: Add initial source/spec directory skeletons.
+- `T04`: Add Teal declarations or wrappers needed for busted/LÖVE.
+- `T05`: Verify generated Lua/spec outputs are ignored.
+- `T06`: Update README with real install/build/test/run commands.
 
-### Milestone 1C: Playable Vertical Slice UI
+Acceptance criteria:
 
-- Starter boon scene.
-- Table scene.
-- Tile selection.
-- Action prompts.
-- Opponent panels.
-- Discards and TileSets.
-- Known Wall display.
-- Boon counters.
-- Scoring explanation.
-- Reward screen after win.
-- Lose life and retry Round 1.
+- LÖVE app boots to a minimal debug screen.
+- `make check` runs successfully.
+- `make build` generates Lua into ignored output directories.
+- `make test` runs busted successfully.
+- No generated Lua/spec files are committed.
 
-### Milestone 1D: Boon Integration
+Verification:
 
-- Current
-- Still Water
-- Dragon's Weight
-- Open Eyes
-- Third Eye
-- Fresh Start
-- Momentum
-- Effect tests for scoring, information, counters, and active actions.
+```sh
+make check
+make build
+make test
+make run
+git status --short
+```
 
----
+Out of scope:
 
-## Milestone 1 Definition
+- gameplay rules
+- polished UI
+- full content definitions
 
-Milestone 1 is a one-round vertical slice, not the full five-round tournament.
+Completion summary:
 
-It includes:
+- Fill this in when the slice is merged.
 
-- start screen
-- choose 1 starter boon from 3 offers
-- play Round 1 against 3 vanilla AIs
-- Draw, Discard, Chi, Peng, Kong, Hu, Pass
-- all listed hand validation/scoring/rating
-- 3 fan minimum
-- win deal -> reward screen with 3 boon offers
-- lose deal -> lose 1 life and retry Round 1
-- run ends at 0 lives
-- minimal readable UI
-- debug inspector
+### S01: Core Tiles, RNG, Wall, And Notation
 
-It excludes:
+Status: `pending`
 
-- Round 2+
-- full opponent packages
+Goal: establish deterministic physical tile movement and test notation.
+
+Why this comes now: every rules, AI, effect, and UI slice depends on tile identity, wall behavior, and deterministic randomness.
+
+Dependencies:
+
+- `S00`
+
+Owned areas:
+
+- `src_tl/core/types.tl`
+- `src_tl/core/rng.tl`
+- `src_tl/core/ids.tl`
+- `src_tl/game/tiles.tl`
+- `src_tl/game/wall.tl`
+- `spec_tl/support/hand_notation.tl`
+- `spec_tl/wall_spec.tl`
+
+Tasks:
+
+- `T01`: Define `TileKindId`, `TileId`, `Tile`, and core identity types.
+- `T02`: Generate the 34 tile kinds and 136 physical tiles.
+- `T03`: Implement pure deterministic xorshift32 RNG.
+- `T04`: Implement Wall shuffle, front draw, back supplement draw, reveal, return-and-shuffle.
+- `T05`: Implement compact test hand notation parser.
+- `T06`: Add tests for tile generation, RNG determinism, wall behavior, notation parsing, and over-copy errors.
+
+Acceptance criteria:
+
+- All 136 physical tiles are unique and map to valid tile kinds.
+- Wall operations preserve physical tile identity.
+- Normal draws come from the front and supplement draws come from the back.
+- Shuffles are deterministic by seed.
+- Notation helpers reject impossible tile counts.
+
+Verification:
+
+```sh
+make test
+```
+
+Out of scope:
+
+- deal engine
+- scoring
+- UI
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S02: Hand Validation, Scoring, And Calls
+
+Status: `pending`
+
+Goal: prove that Hong Kong mahjong Hu validation, pattern scoring, ratings, and call legality work without UI or AI.
+
+Why this comes now: the deal engine should call trusted rule modules rather than mix validation/scoring into state transitions.
+
+Dependencies:
+
+- `S01`
+
+Owned areas:
+
+- `src_tl/game/deal_types.tl`
+- `src_tl/game/hand_validator.tl`
+- `src_tl/game/ting_distance.tl`
+- `src_tl/game/scorer.tl`
+- `src_tl/game/calls.tl`
+- `src_tl/game/deal_invariants.tl`
+- `src_tl/content/hand_patterns.tl`
+- `spec_tl/hand_validator_spec.tl`
+- `spec_tl/ting_distance_spec.tl`
+- `spec_tl/scorer_spec.tl`
+- `spec_tl/calls_spec.tl`
+
+Tasks:
+
+- `T01`: Define `DealAction`, `PlayerHand`, `TileSet`, win shape, scoring, and event records.
+- `T02`: Implement standard four-sets-pair validation.
+- `T03`: Implement Seven Pairs, Thirteen Orphans, and Nine Gates validation.
+- `T04`: Implement ting distance for standard, seven-pairs, and thirteen-orphans paths.
+- `T05`: Implement listed hand pattern detection and fan/rating scoring.
+- `T06`: Return all valid score candidates and choose the best result.
+- `T07`: Implement Chi/Peng/Kong legality helpers.
+- `T08`: Implement tile conservation invariant checks.
+- `T09`: Add rules tests for validation, scoring, calls, and invariants.
+
+Acceptance criteria:
+
+- Validator returns all supported win shapes.
+- Scorer enforces 3 fan minimum unless the result is a limit hand.
+- Limit hands use `is_limit`, not fake fan totals.
+- Call helpers enforce Chi/Peng/Kong constraints.
+- Tests cover representative legal and illegal hands for every supported win shape.
+
+Verification:
+
+```sh
+make test
+```
+
+Out of scope:
+
+- turn sequencing
+- AI
+- effects/boons
+- UI prompts
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S03: Deal Engine And Reaction Flow
+
+Status: `pending`
+
+Goal: implement deterministic deal state transitions from opening deal through win, wall exhaustion, reactions, and Kong flows.
+
+Why this comes now: the engine is the integration point between rules, AI, effects, and UI.
+
+Dependencies:
+
+- `S02`
+
+Owned areas:
+
+- `src_tl/game/deal_engine.tl`
+- `src_tl/game/deal_types.tl`
+- `src_tl/game/deal_invariants.tl`
+- `src_tl/game/run_state.tl`
+- deal engine specs
+
+Tasks:
+
+- `T01`: Implement opening deal and `opening_actions` phase.
+- `T02`: Implement draw/discard flow.
+- `T03`: Implement discard reaction windows and priority resolution.
+- `T04`: Implement concealed, open, and added Kong flows.
+- `T05`: Implement Qiang Gang and Gang Shang flags.
+- `T06`: Implement wall exhaustion and `DealResult`.
+- `T07`: Ensure every transition validates or can report tile conservation.
+- `T08`: Add deterministic transition tests for normal wins, opponent wins, wall exhaustion, and Kong cases.
+
+Acceptance criteria:
+
+- A complete deal can progress from opening to win or wall exhaustion through `DealAction`s.
+- Illegal actions return typed errors.
+- Tile conservation holds across draw, discard, claim, Kong, Hu, and wall exhaustion transitions.
+- RNG state is updated only through transition return values.
+
+Verification:
+
+```sh
+make test
+```
+
+Out of scope:
+
+- AI decision quality
+- LÖVE table UI
+- boon behavior
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S04: Effect System And Starter Boons
+
+Status: `pending`
+
+Goal: add the typed effect architecture and implement the seven Milestone 1 starter boons through it.
+
+Why this comes now: boons are central to the roguelike identity and should integrate through typed hooks before UI polish.
+
+Dependencies:
+
+- `S03`
+
+Owned areas:
+
+- `src_tl/effects/effect_types.tl`
+- `src_tl/effects/effect_registry.tl`
+- `src_tl/effects/effect_runner.tl`
+- `src_tl/effects/boons/`
+- `src_tl/content/boons.tl`
+- `spec_tl/effects_spec.tl`
+
+Tasks:
+
+- `T01`: Define effect metadata, active effect state, query types, and command types.
+- `T02`: Implement deterministic effect ordering.
+- `T03`: Wire score modifier, opening modifier, wall reveal, tile replacement, counter, and log commands.
+- `T04`: Implement Current, Still Water, and Dragon's Weight.
+- `T05`: Implement Open Eyes and Third Eye Known Wall behavior.
+- `T06`: Implement Fresh Start tile replacement and wall reshuffle.
+- `T07`: Implement Momentum opening modifier.
+- `T08`: Add tests for scoring modifiers, Known Wall, counters, command application, and ordering.
+
+Acceptance criteria:
+
+- Effects do not mutate deal/run state directly.
+- Effects cannot bypass Hu shape validation or the 3 fan minimum.
+- All seven starter boons are available as typed content and behavior modules.
+- Fresh Start clears Known Wall and preserves tile conservation.
+
+Verification:
+
+```sh
+make test
+```
+
+Out of scope:
+
+- full boon pool
+- opponent packages
+- rare rule-canceling effects
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S05: Vanilla AI And Debug Inspector
+
+Status: `pending`
+
+Goal: make the deal playable without multiplayer by adding vanilla AI decisions and a minimal debug UI for rule inspection.
+
+Why this comes now: AI and inspector output expose whether the engine is playable before building the final table experience.
+
+Dependencies:
+
+- `S03`
+- `S04` for boon state visibility in the inspector
+
+Owned areas:
+
+- `src_tl/game/ai.tl`
+- `src_tl/ui/`
+- `src_tl/scenes/table_scene.tl`
+- AI/debug specs as needed
+
+Tasks:
+
+- `T01`: Implement legal AI Hu decision using the scorer.
+- `T02`: Implement ting-distance discard heuristic.
+- `T03`: Implement conservative Chi/Peng/open Kong decisions.
+- `T04`: Implement concealed/added Kong decisions.
+- `T05`: Emit AI reasoning events/log entries.
+- `T06`: Build debug table view with player hand, hidden AI hands, discards, open sets, wall count, and log.
+- `T07`: Add inspector toggle showing AI concealed hands, score candidates, pending reactions, seeds, Known Wall, and invariant result.
+
+Acceptance criteria:
+
+- AI uses `DealAction`s and never mutates state directly.
+- AI concealed tiles are hidden in normal Dev Mode and visible in Inspector Mode.
+- AI does not read player-only `known_wall_tile_ids`.
+- Debug UI can play through a complete deal and inspect failures.
+
+Verification:
+
+```sh
+make test
+make run
+```
+
+Out of scope:
+
 - defensive AI
-- multiplayer
+- opponent personalities/packages
 - animation polish
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S05 Integration Gate
+
+Before starting `S06`, the following must be demonstrable through the debug UI:
+
+- [ ] A complete deal plays from opening to win or wall exhaustion without crashing.
+- [ ] Tile conservation invariant passes at every deal transition.
+- [ ] AI discards and calls are visible in the log with ting distance reasoning.
+- [ ] At least one AI player can successfully declare Hu against the player.
+- [ ] Wall exhaustion ends the deal as a loss.
+- [ ] Run seed and deal seed are visible in the inspector.
+
+If any of these fail, stay in `S05` until resolved. Do not start the playable table slice with a broken deal engine.
+
+### S06: Playable Round 1 UI
+
+Status: `pending`
+
+Goal: turn the debug-playable deal into a human-playable Round 1 flow.
+
+Why this comes now: the rules stack should already work; this slice focuses on ergonomic play and state presentation.
+
+Dependencies:
+
+- `S05`
+
+Owned areas:
+
+- `src_tl/app/`
+- `src_tl/ui/`
+- `src_tl/scenes/start_scene.tl`
+- `src_tl/scenes/boon_select_scene.tl`
+- `src_tl/scenes/table_scene.tl`
+- `src_tl/scenes/reward_scene.tl`
+- `src_tl/scenes/result_scene.tl`
+
+Tasks:
+
+- `T01`: Implement scene stack and app wiring.
+- `T02`: Implement start/run setup screen.
+- `T03`: Implement starter boon selection screen with 3 curated offers.
+- `T04`: Implement table view with tile rendering, player hand, opponent panels, discard piles, open sets, and wall count.
+- `T05`: Implement player tile selection and discard action.
+- `T06`: Implement action prompts for Chi, Peng, Kong, Hu, and Pass.
+- `T07`: Implement Known Wall, boon counters, and scoring explanation displays.
+- `T08`: Implement Fresh Start opening tile-swap interaction.
+- `T09`: Implement reward screen after a Round 1 win.
+- `T10`: Implement lose-life/retry and 0-lives run loss flow.
+
+Acceptance criteria:
+
+- Player can start Round 1, choose a starter boon, and play through a deal.
+- Player legal actions are visible and selectable.
+- The reward screen appears after player win.
+- Losing a deal costs 1 life and retries Round 1.
+- Run ends at 0 lives.
+- Debug inspector remains available.
+
+Verification:
+
+```sh
+make test
+make run
+```
+
+Out of scope:
+
 - tutorial
-- Steam/export pipeline
+- animation polish
+- full tournament advancement
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S07: Milestone 1 Integration And Playtest Pass
+
+Status: `pending`
+
+Goal: stabilize the one-round vertical slice for internal playtesting.
+
+Why this comes now: the feature set needs a focused pass for regressions, confusing UI, and missing debug visibility before broader Phase 0 work.
+
+Dependencies:
+
+- `S06`
+
+Owned areas:
+
+- cross-cutting integration fixes
+- tests
+- docs
+
+Tasks:
+
+- `T01`: Run a full smoke pass across starter boon selection, deal play, win reward, loss retry, and run loss.
+- `T02`: Add regression tests for bugs found during smoke testing.
+- `T03`: Audit import boundaries and generated-file hygiene.
+- `T04`: Audit HK mahjong terminology and remove accidental Japanese terminology.
+- `T05`: Update README and docs where behavior or commands changed.
+- `T06`: Add durable decisions or learnings to `docs/DECISIONS.md`.
+
+Acceptance criteria:
+
+- Definition Of Done is satisfied.
+- The slice is playable enough for dev/playtester feedback.
+- Known rough edges are documented as follow-up work, not hidden in the final response.
+
+Verification:
+
+```sh
+make check
+make test
+make run
+git status --short
+```
+
+Out of scope:
+
+- new gameplay features beyond Milestone 1
+- balance tuning beyond obvious bug fixes
+
+Completion summary:
+
+- Fill this in when the slice is merged.
 
 ---
 
@@ -921,7 +1595,4 @@ It excludes:
 
 - Decide exact Teal and busted installation commands once toolchain is initialized.
 - Decide whether to use LuaJIT or system Lua for generated test execution.
-- Define the exact `ScoreFacts` record.
-- Define exact `EffectCommand` record variants.
-- Define detailed AI discard heuristic weights.
 - Decide whether PRD and architecture docs should be split from this plan or generated from it.

@@ -199,7 +199,7 @@ Every boon fires on one of these moments inside a single hand:
 3. **Each discard** you make
 4. **Calling** Chi, Peng, or Kong
 5. **Passing** on a legal call
-6. **Reaching tenpai** (one tile from Hu)
+6. **Reaching ting** (one tile from a valid Hu)
 7. **Winning by Zi Mo**
 8. **Winning by discard, last tile, or robbing a Kong**
 
@@ -297,12 +297,15 @@ Only the 12 boons listed in **Phase 0 Boon Pool** are required for the broader P
 Passive. Each time you draw a tile that matches the suit you currently have the most of in your hand, gain 1 Suit Counter (tracked in UI). When you Hu, add +1 fan per 4 Suit Counters. Rewards natural suit concentration without requiring a declaration upfront.
 
 **[T1] Forced Hand**
+> Future candidate — not in Phase 0.
 Passive. After completing any Chi sequence, the next tile you draw is revealed before you commit to drawing it. You may pass the draw and take the tile after it instead. Information reward for building sequences.
 
 **[T2] Saturation**
+> Future candidate — not in Phase 0.
 Passive. When your hand contains 10 or more tiles of the same suit, draw 2 tiles per turn instead of 1. Activates automatically once you reach the threshold. Specifically enables Nine Gates without pre-declaring it.
 
 **[T3] Pure Expression**
+> Future candidate — not in Phase 0.
 Passive. If you win a Qing Yi Se with a fully concealed hand, your hand is treated as if won by Zi Mo regardless of how you actually won. Hard prerequisite (concealed + pure suit) for a meaningful rule exception. Does not apply to open melds.
 
 ---
@@ -317,9 +320,11 @@ Passive. Each time you legally pass on a call you could have made (Chi, Peng, or
 Passive. Your Men Qian (concealed hand) bonus gives +2 fan instead of +1. Straightforward amplification of a condition already worth pursuing.
 
 **[T2] Patient Tide**
-Passive. If you are in tenpai for 4 or more consecutive turns without winning, gain +2 fan when you finally Hu. Rewards holding out for the right tile rather than settling.
+> Future candidate — not in Phase 0.
+Passive. If you are in ting for 4 or more consecutive turns without winning, gain +2 fan when you finally Hu. Rewards holding out for the right tile rather than settling.
 
 **[T2] Iron Grip**
+> Future candidate — not in Phase 0.
 Passive. If a tile has been in your hand for 8 or more turns and it ends up being part of your winning hand, that tile's set scores +1 fan. Rewards reading early and committing to a shape before anyone else sees it.
 
 ---
@@ -337,6 +342,7 @@ Passive. After completing any Peng, reveal the top 3 tiles of the Wall before yo
 Passive. If your hand contains 2 or more Pengs when you Hu, score +2 fan. Rewards committing to an all-triplet strategy regardless of hand shape.
 
 **[T2] Kong Surge**
+> Future candidate — not in Phase 0.
 Active. Once per hand, after declaring a Kong, you may draw 2 supplement tiles instead of 1 and choose which to keep, discarding the other. Converts the rarest call in mahjong into a genuine strategic tool.
 
 ---
@@ -348,9 +354,11 @@ Active. Once per hand, after declaring a Kong, you may draw 2 supplement tiles i
 Passive. After your opening hand is dealt, reveal the next 5 Wall tiles. Shapes your early discards with knowledge of what is coming immediately.
 
 **[T1] Trailing Wind**
+> Future candidate — not in Phase 0.
 Passive. Whenever any opponent completes a call (Chi, Peng, or Kong), see the next tile they will draw. Track opponent builds in real time without any active input.
 
 **[T2] Second Sight**
+> Future candidate — not in Phase 0.
 Active. Once per hand, before drawing your tile, you may look at the next 3 Wall tiles and decide whether to draw normally or pass your turn entirely. Information before commitment.
 
 **[T2] Fresh Start**
@@ -365,7 +373,7 @@ Active. Once per hand, during the opening, swap up to 3 tiles from your starting
 Passive. Winning with 12 or fewer tiles left in the Wall gives +1 fan. Winning on the very last tile of the Wall (Hai Di) gives +3 fan instead of +1. Makes late-Wall play worth engineering toward without making the boon dead in most hands.
 
 **[T1] Stolen Thunder**
-Passive. Robbing a Kong (Qiang Gang) gives +3 fan instead of +1. If an opponent declares any Kong while you are in tenpai, gain +1 fan on your eventual Hu this hand. Rewards reading opponents' Kong declarations and positioning your hand to punish them.
+Passive. Robbing a Kong (Qiang Gang) gives +3 fan instead of +1. If an opponent declares any Kong while you are in ting, gain +1 fan on your eventual Hu this hand. Rewards reading opponents' Kong declarations and positioning your hand to punish them.
 
 **[T2] Double or Nothing**
 Active. Once per hand, before drawing any tile, declare "Double." If the tile you draw completes your hand at or above minimum fan, score x2 total fan. If it does not, lose 1 life immediately. A direct bet on a single draw. Deferred until after Phase 0 because multiplicative fan and mid-hand life loss add major balance noise.
@@ -385,9 +393,11 @@ Passive. For each round you have won so far in this tournament, start this hand 
 Passive. Gain +1 fan if you won the previous round. Gain +2 fan instead if your previous win was A rating or better. Makes later rounds feel momentum-driven without giving free fan simply for already being ahead.
 
 **[T2] Muscle Memory**
+> Future candidate — not in Phase 0.
 Passive. If you won the previous round by completing the same hand pattern you are currently building (e.g. Qing Yi Se two rounds in a row), gain +2 fan when you Hu this round. Rewards committing to a consistent strategy across rounds.
 
 **[T2] Veteran's Edge**
+> Future candidate — not in Phase 0.
 Active. Once per hand, retrieve any tile from the discard pile -- yours or an opponent's -- into your hand, then discard any tile normally. Unlocks only after winning 2 or more rounds. Tournament experience grants a skill that beginners do not have access to.
 
 ---
@@ -422,7 +432,7 @@ The combinations worth knowing before playtesting:
 
 **Opponent-affecting boons:** Deferred. Self-affecting boons need to be validated first.
 
-**Shanten-based HP loss:** Removed for Phase 0. Losing a hand costs exactly 1 life. The more nuanced "how close were you?" damage model can return later if the core loop needs more texture.
+**Ting-distance HP loss:** Removed for Phase 0. Losing a hand costs exactly 1 life. The more nuanced "how close were you?" damage model can return later if the core loop needs more texture.
 
 ---
 
@@ -442,7 +452,7 @@ After the first loop test, expand toward 18-20 boons before judging long-term re
 
 **Same River** (Sculptor): Passive. After you discard an honor tile, the next suited tile you draw that matches your majority suit gains 1 Suit Counter.
 
-**Quiet Door** (Hunter): Passive. If you reach tenpai with a concealed hand, gain +1 fan on Hu this hand.
+**Quiet Door** (Hunter): Passive. If you reach ting with a concealed hand, gain +1 fan on Hu this hand.
 
 **Known Quantity** (Reader): Passive. After any player reveals tiles through a call, mark one tile type from that meld. If you Hu using that tile type, gain +1 fan.
 
