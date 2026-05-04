@@ -1419,7 +1419,7 @@ Completion summary:
 
 ### S05: Vanilla AI And Debug Inspector
 
-Status: `in_progress`
+Status: `complete`
 
 Goal: make the deal playable without multiplayer by adding vanilla AI decisions and a minimal debug UI for rule inspection.
 
@@ -1469,7 +1469,16 @@ Out of scope:
 
 Completion summary:
 
-- Fill this in when the slice is merged.
+- Vanilla AI module in `src_tl/game/ai.tl` with two pure entry points: `decide_main(deal, player_index)` for own-turn decisions (zi mo → added kong → concealed kong → ting-distance discard) and `decide_reaction(deal, player_index)` for reaction windows (hu → open kong → peng → chi → pass, gated by no-ting-regression). Hu legality flows through the engine's same scorer + `effect_runner.apply_score_modifiers` path so the 3-fan minimum and boon modifiers apply uniformly.
+- `AiReasoning` record returned alongside every action carries `tag`, `message`, `ting_before`, `ting_after` for the inspector / log.
+- Debug table scene in `src_tl/scenes/table_scene.tl`: spectator-mode rendering, cardinal layout (East/dealer at bottom), F1 inspector overlay, T toggles step mode, S advances one engine action, R restarts with the same seed. Tile-conservation invariant is checked after every transition; failures land in the log.
+- Inspector reveals AI hands, ting per seat (live-aware), score candidates near ting, deal seed, conservation result, active-effect counters, and Known Wall size.
+- Live-aware ting distance (`ting_distance_live`) prunes paths whose required completing tiles are no longer drawable (already in own concealed, any open set, any discard pile, or pending discard). Threaded through the AI's discard heuristic, kong evaluation, and reaction logic. Friendly ting labels (`TING` / `Nt away` / `dead`) replace raw integers in the inspector.
+- Tooling: `tlconfig.lua` `gen_target = "5.1"` so generated Lua parses under LuaJIT (LÖVE's runtime); `lua_compat/bit32.lua` polyfill aliases LuaJIT's `bit` (and falls back to a 5.3+ implementation via `load()` for non-LuaJIT runtimes). Captured as D007.
+- DECISIONS entries: D006 (AI is a pure decision function; the scene drives turn pumping), D007 (5.1 codegen + bit32 polyfill).
+- `make test` passes 172 / 0 / 0 (16 AI tests + 4 live ting tests in addition to S04's 152).
+- Merged via PRs #6 (Stage A: AI module) and #7 (Stage B: scene + inspector + tooling + live-ting).
+- Known limitation surfaced by playtesting: the ting-only heuristic doesn't reason about fan, so vanilla AIs frequently reach ting on hands that can't clear the 3-fan minimum and exhaust the wall. A follow-up "Smart AI" slice will replace `pick_best_discard` and the reaction logic with target-pattern strategy (Dui Dui Hu / Hun Yi Se / Qing Yi Se / default). Surrounding infrastructure (engine integration, inspector, live ting, scene driver) carries forward unchanged.
 
 ### S05 Integration Gate
 
