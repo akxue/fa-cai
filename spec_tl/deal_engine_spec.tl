@@ -93,6 +93,7 @@ local function make_deal(
       last_draw_was_supplement = false,
       last_drawn_tile_id       = last_drawn_tile_id,
       has_last_drawn           = has_last_drawn,
+      effect_states            = {},
    }
 end
 
@@ -613,6 +614,7 @@ describe("deal_engine", function()
                has_score_result = false },
             has_deal_result = false, reaction_passes = {}, pending_claims = {},
             last_draw_was_supplement = false, last_drawn_tile_id = "tiao_5_d" as TileId, has_last_drawn = true,
+            effect_states = {},
          }
 
          local tr1 = engine.apply_action(d, engine.declare_added_kong(1, "tiao_5_d" as TileId))
@@ -671,6 +673,7 @@ describe("deal_engine", function()
                has_score_result = false },
             has_deal_result = false, reaction_passes = {}, pending_claims = {},
             last_draw_was_supplement = false, last_drawn_tile_id = "tiao_5_d" as TileId, has_last_drawn = true,
+            effect_states = {},
          }
 
          local tr1 = engine.apply_action(d, engine.declare_added_kong(1, "tiao_5_d" as TileId))

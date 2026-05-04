@@ -31,6 +31,9 @@ global type DealPhase = string
 -- "opening_actions" | "awaiting_draw" | "awaiting_action"
 -- | "reaction_window" | "deal_over"
 
+global type EffectSourceKind = string
+-- "boon" | "opponent_package" | "relic" | "class" | "boss_aura" | "challenge"
+
 global record PendingDiscard
    tile:          Tile
    discarder:     integer
@@ -83,11 +86,20 @@ global record DealState
    last_draw_was_supplement: boolean
    last_drawn_tile_id:   TileId         -- tile drawn on the most recent draw (for zi mo)
    has_last_drawn:       boolean
+   effect_states:        {string: ActiveEffectState}  -- keyed by active_effect_id
 end
 
--- Placeholder — filled out in S04. Every active effect carries an id.
+-- An active effect instance owned by a player (or the deal). Counters live here
+-- and survive within a deal; persistent ownership lives on RunState.active_effects.
 global record ActiveEffectState
-   active_effect_id: string
+   active_effect_id:    string
+   effect_id:           string         -- canonical effect id (e.g. "current")
+   source_kind:         EffectSourceKind
+   source_id:           string         -- e.g. boon id; identifies the source
+   owner_player_index:  integer        -- -1 = deal-owned (no specific owner)
+   has_owner:           boolean
+   counters:            {string: integer}
+   used_this_deal:      boolean
 end
 
 -- ── Win shapes ────────────────────────────────────────────────────────────
@@ -197,6 +209,18 @@ global record UseEffectAction
    kind:             string   -- "use_effect_action"
    player_index:     integer
    active_effect_id: string
+   tile_ids:         {TileId}   -- effect-specific payload; e.g. Fresh Start tiles
+end
+
+global record DiscardOpeningSurplusAction
+   kind:         string   -- "discard_opening_surplus"
+   player_index: integer
+   tile_id:      TileId
+end
+
+global record ConfirmOpeningAction
+   kind:         string   -- "confirm_opening"
+   player_index: integer
 end
 
 -- ── Events ────────────────────────────────────────────────────────────────

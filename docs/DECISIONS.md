@@ -101,3 +101,27 @@ Implications:
 - Branches should be small and named by task area.
 - PRs should include scope, changed files, verification, screenshots/clips for UI, and open questions.
 - CI should be added only after local `make check` and `make test` exist.
+
+## D005: Effects Produce Commands; The Engine Applies; The Runner Is The Only Score Modifier Hook
+
+Status: accepted
+
+Context:
+- Boons (and later relics, classes, opponent packages, boss auras, challenge modifiers) need to extend rules without forking core engine code.
+- Score modifiers are the most invasive hook: a careless implementation could let boons bypass the 3-fan minimum or change Hu shape validation.
+
+Decision:
+- Effect modules implement read-only query hooks (`on_score`, `collect_opening_modifiers`, `collect_available_actions`) and lifecycle hooks that return typed `EffectCommand` values (`on_after_draw`, `on_after_peng`, `on_opening_deal_complete`, `on_use_action`).
+- The engine deep-copies the deal, the runner applies commands to that copy, and the engine returns the new state.
+- For scoring, the scorer always runs first and chooses the best win shape; only then does `effect_runner.apply_score_modifiers` append boon `ScoreReason`s and recompute `total_fan` / `valid_hu` using the same rule the scorer uses (`is_limit or total_fan >= 3`).
+
+Reason:
+- Effects cannot mutate core state directly, so they cannot violate invariants.
+- Hu shape validation runs before any boon contribution, so boons cannot legalize a non-Hu hand.
+- The 3-fan minimum is re-evaluated after boon fan, so a boon that adds fan to a hand still needs the hand to clear the threshold; nothing about the runner shortcuts this.
+
+Implications:
+- Adding a new effect requires: a metadata record in `content/`, a behavior module in `effects/boons/` (or a future folder for non-boon effects), and registration in the boons init.
+- New command kinds extend the typed envelope and the dispatcher in `effect_runner.apply_commands`. They must also have a builder function so call sites stay typed.
+- Reshuffling the wall invalidates Known Wall information, so `replace_concealed_tiles` with `reshuffle_wall=true` clears `known_wall_tile_ids`.
+- AI-only effects in future slices follow the same pattern; the runner already filters by owner via `has_owner` and `owner_player_index`.
