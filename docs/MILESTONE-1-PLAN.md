@@ -1357,7 +1357,7 @@ Completion summary:
 
 ### S04: Effect System And Starter Boons
 
-Status: `in_progress`
+Status: `complete`
 
 Goal: add the typed effect architecture and implement the seven Milestone 1 starter boons through it.
 
@@ -1408,7 +1408,14 @@ Out of scope:
 
 Completion summary:
 
-- Fill this in when the slice is merged.
+- Typed effect query/command architecture in `src_tl/effects/` (effect_types, effect_registry, effect_runner, boons/) with deterministic ordering by `(priority, effect_id)`.
+- Six command kinds wired through `effect_runner.apply_commands`: `increment_counter`, `set_counter`, `mark_used`, `reveal_wall_front`, `replace_concealed_tiles`, `add_log`.
+- Seven starter boons implemented: Current, Still Water, Dragon's Weight, Open Eyes, Third Eye, Fresh Start, Momentum.
+- New `opening_actions` phase + `confirm_opening`, `discard_opening_surplus`, `use_effect_action` action handlers.
+- Scoring routed through `effect_runner.apply_score_modifiers` at all three sites (Zi Mo, Hu on discard, Qiang Gang); the runner iterates every win-shape candidate post-boon and re-evaluates `valid_hu = is_limit or total_fan >= 3`. Pre-claim Hu validation in the reaction window is also boon-aware.
+- DECISIONS entry D005 captures the runner-as-only-score-integration-point model.
+- `make test` passes 152 / 0 / 0 (29 new tests in `spec_tl/effects_spec.tl`).
+- Merged via PR #5.
 
 ### S05: Vanilla AI And Debug Inspector
 
