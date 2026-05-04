@@ -1,6 +1,8 @@
--- Minimal LÖVE 11.x type declarations (S00 scope — expand per slice as needed)
+-- Minimal LÖVE 11.x type declarations. Expand per slice as needed.
 
 global record Font
+   getWidth: function(Font, text: string): number
+   getHeight: function(Font): number
 end
 
 global record love
@@ -12,9 +14,12 @@ global record love
 
    record graphics
       print:                function(text: string, x: number, y: number)
+      printf:               function(text: string, x: number, y: number, limit: number, align: string)
       setColor:             function(r: number, g: number, b: number, a: number)
       setBackgroundColor:   function(r: number, g: number, b: number, a: number)
       rectangle:            function(mode: string, x: number, y: number, w: number, h: number)
+      line:                 function(x1: number, y1: number, x2: number, y2: number)
+      setLineWidth:         function(w: number)
       getWidth:             function(): number
       getHeight:            function(): number
       getDimensions:        function(): (number, number)
@@ -25,11 +30,13 @@ global record love
 
    record window
       setTitle:      function(title: string)
+      setMode:       function(width: number, height: number, flags: {string:any})
       getDimensions: function(): (number, number)
    end
 
    record timer
-      getFPS: function(): number
+      getFPS:   function(): number
+      getDelta: function(): number
    end
 
    record event
