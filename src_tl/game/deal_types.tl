@@ -52,6 +52,15 @@ global record DealResult
    winner_player_index: integer   -- -1 = wall exhaustion, no winner
    won_by_zi_mo:        boolean
    score_result:        ScoreResult   -- defined below; forward ref resolved at use
+   has_score_result:    boolean
+end
+
+-- A queued reaction-window claim awaiting priority resolution.
+-- chi_other_tile_ids is populated only when kind == "chi".
+global record PendingClaim
+   player_index:       integer
+   kind:               string   -- "hu" | "peng" | "chi" | "open_kong"
+   chi_other_tile_ids: {TileId}
 end
 
 global record DealState
@@ -69,6 +78,16 @@ global record DealState
    rng:                  RngState
    deal_result:          DealResult
    has_deal_result:      boolean
+   reaction_passes:      {integer}      -- player indices who passed in current window
+   pending_claims:       {PendingClaim} -- queued claims awaiting priority resolution
+   last_draw_was_supplement: boolean
+   last_drawn_tile_id:   TileId         -- tile drawn on the most recent draw (for zi mo)
+   has_last_drawn:       boolean
+end
+
+-- Placeholder — filled out in S04. Every active effect carries an id.
+global record ActiveEffectState
+   active_effect_id: string
 end
 
 -- ── Win shapes ────────────────────────────────────────────────────────────
@@ -192,6 +211,14 @@ global record DealTransition
    deal:   DealState
    events: {DealEvent}
    error:  string
+end
+
+-- Public action envelope. All concrete action records (DrawAction, DiscardAction,
+-- DeclareHuAction, ...) carry the same `kind: string` field plus action-specific
+-- data; DealAction is the typed boundary used by apply_action. Construct one via
+-- the builder functions exported from deal_engine (engine.draw, engine.discard, …).
+global record DealAction
+   kind: string
 end
 
 return {}
