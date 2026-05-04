@@ -1419,7 +1419,7 @@ Completion summary:
 
 ### S05: Vanilla AI And Debug Inspector
 
-Status: `pending`
+Status: `in_progress`
 
 Goal: make the deal playable without multiplayer by adding vanilla AI decisions and a minimal debug UI for rule inspection.
 

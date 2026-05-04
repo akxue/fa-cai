@@ -125,3 +125,27 @@ Implications:
 - New command kinds extend the typed envelope and the dispatcher in `effect_runner.apply_commands`. They must also have a builder function so call sites stay typed.
 - Reshuffling the wall invalidates Known Wall information, so `replace_concealed_tiles` with `reshuffle_wall=true` clears `known_wall_tile_ids`.
 - AI-only effects in future slices follow the same pattern; the runner already filters by owner via `has_owner` and `owner_player_index`.
+
+## D006: AI Is A Pure Decision Function; The Scene Drives Turn Pumping
+
+Status: accepted
+
+Context:
+- The deal engine is a pure state machine driven by `DealAction`s. AI must use the same path as the human player.
+- Either the engine could pump AI turns automatically, or an outer driver (the table scene) could call AI for non-human seats and dispatch the returned action.
+
+Decision:
+- AI lives in `src_tl/game/ai.tl` as pure decision functions: `decide_main(deal, player_index)` for the AI's own turn, `decide_reaction(deal, player_index)` for reaction windows.
+- Both return `(DealAction, AiReasoning)`. The scene is responsible for calling AI when a non-human seat needs to act, dispatching the action through `engine.apply_action`, and surfacing the reasoning in the log/inspector.
+- `deal_engine` knows nothing about AI.
+
+Reason:
+- Keeps the engine purely rules-driven and trivial to test in isolation.
+- Reaction windows already require multi-seat polling that the engine handles via priority resolution; the scene already needs to coordinate which seats have/haven't responded, so it's the natural driver.
+- Lets us swap AI implementations (vanilla, defensive, opponent packages) by replacing the function call, not by reshaping the engine.
+
+Implications:
+- AI must not import `love`, `ui`, `scenes`, or `app`, and must not read `known_wall_tile_ids` (player-only information).
+- AI returns `DealAction`s only; never mutates `DealState` directly.
+- `AiReasoning` is a structured record (tag, message, ting_before, ting_after) returned alongside the action; events stay free of subjective AI commentary.
+- Future opponent packages plug into the same two functions or layer on top through composition; no engine changes required.
