@@ -298,8 +298,18 @@ local function format_open_sets(player: PlayerState): string
    return table.concat(parts, " ")
 end
 
-local function ting_for(player: PlayerState): integer
-   return td.ting_distance(player.hand.concealed_tiles, player.hand.sets)
+local function ting_for(seat_index: integer): integer
+   local p = state.deal.players[seat_index]
+   local live = ai.compute_live_counts(state.deal, seat_index)
+   return td.ting_distance_live(p.hand.concealed_tiles, p.hand.sets, live)
+end
+
+-- Friendly label: -1 → "TING (live)", N → "(N+1)t away", high N → "dead".
+local function ting_label(seat_index: integer): string
+   local t = ting_for(seat_index)
+   if t >= 90 then return "dead" end
+   if t == -1 then return "TING" end
+   return string.format("%dt away", t + 1)
 end
 
 local function draw_seat_panel(seat_index: integer, x: number, y: number, w: number, h: number)
@@ -316,7 +326,7 @@ local function draw_seat_panel(seat_index: integer, x: number, y: number, w: num
    local reveal = p.is_human or state.inspector_open
    draw_text("hand: " .. format_concealed(p, reveal), tx, ty); ty = ty + 16
    if reveal then
-      draw_text(string.format("ting: %d", ting_for(p)), tx, ty); ty = ty + 16
+      draw_text("ting: " .. ting_label(seat_index), tx, ty); ty = ty + 16
    else
       draw_text(string.format("tiles: %d", #p.hand.concealed_tiles), tx, ty); ty = ty + 16
    end
@@ -400,7 +410,7 @@ end
 local function draw_score_candidates_for(seat: integer, x: number, y: number): number
    local d = state.deal
    local p = d.players[seat]
-   if ting_for(p) > -1 then return y end
+   if ting_for(seat) > -1 then return y end
    -- For inspector preview, walk the wall front to find which upcoming tile would win.
    for i = 1, math.min(8, #d.wall.tiles) do
       local incoming = d.wall.tiles[i]
@@ -454,9 +464,8 @@ local function draw_inspector(x: number, y: number, w: number, h: number)
    ty = ty + 6
    draw_text("score candidates near ting:", tx, ty); ty = ty + 16
    for seat = 1, 4 do
-      local p = d.players[seat]
-      local t = ting_for(p)
-      draw_text(string.format("  p%d ting=%d", seat, t), tx, ty); ty = ty + 14
+      local t = ting_for(seat)
+      draw_text(string.format("  p%d %s", seat, ting_label(seat)), tx, ty); ty = ty + 14
       if t == -1 then
          ty = draw_score_candidates_for(seat, tx, ty)
       end
