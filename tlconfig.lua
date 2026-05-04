@@ -4,4 +4,5 @@ return {
    include_dir = {"src_tl", "types"},
    global_env_def = "love",
    gen_compat = "optional",
+   gen_target = "5.1",
 }

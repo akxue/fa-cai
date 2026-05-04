@@ -149,3 +149,26 @@ Implications:
 - AI returns `DealAction`s only; never mutates `DealState` directly.
 - `AiReasoning` is a structured record (tag, message, ting_before, ting_after) returned alongside the action; events stay free of subjective AI commentary.
 - Future opponent packages plug into the same two functions or layer on top through composition; no engine changes required.
+
+## D007: Generate Lua 5.1 With A `bit32` Polyfill
+
+Status: accepted
+
+Context:
+- LÖVE 11.x ships LuaJIT 2.1, which only parses Lua 5.1 syntax. The `~`, `<<`, `>>`, `&` bitwise operators used by `core/rng.tl` are 5.3+ syntax and fail to load under LuaJIT.
+- Lua 5.4 (used by `make test` via busted) dropped the `bit32` library entirely.
+- LuaJIT ships `bit` (with the same function set under different naming) but not `bit32`; Teal generates `bit32.*` calls when targeting 5.1.
+
+Decision:
+- Set `gen_target = "5.1"` in `tlconfig.lua` so generated Lua is parseable by LuaJIT.
+- Ship a hand-written `lua_compat/bit32.lua` polyfill that aliases LuaJIT's `bit` if available, and otherwise compiles a 5.3+-syntax implementation via `load()` to stay parseable under any Lua.
+- `make build` copies the polyfill to `src/bit32.lua` so LÖVE's package path picks it up.
+- `make test` adds `lua_compat/?.lua` to busted's lpath so Lua 5.4 also resolves `require("bit32")`.
+
+Reason:
+- One generated artifact set keeps the build tree simple — same code runs in tests and in LÖVE.
+- The polyfill is a few lines; avoiding it would require maintaining two build targets or carrying a runtime dependency.
+
+Implications:
+- New runtime-only Lua compat shims belong in `lua_compat/` (committed); generated outputs in `src/` and `spec/` remain untracked.
+- Anyone adding code that uses Lua 5.3-only features beyond bitwise ops (e.g., integer/float distinction, `goto`, `<close>`) must either ship a similar shim or stay within the 5.1 dialect.
