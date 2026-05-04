@@ -1357,7 +1357,7 @@ Completion summary:
 
 ### S04: Effect System And Starter Boons
 
-Status: `pending`
+Status: `in_progress`
 
 Goal: add the typed effect architecture and implement the seven Milestone 1 starter boons through it.
 
