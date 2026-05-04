@@ -12,8 +12,10 @@
 require("core.types")
 require("core.rng")
 require("game.deal_types")
+require("effects.effect_types")
 local rng_mod    = require("core.rng")
 local engine     = require("game.deal_engine")
+local run_state  = require("game.run_state")
 local ai         = require("game.ai")
 local td         = require("game.ting_distance")
 local invariants = require("game.deal_invariants")
@@ -21,6 +23,8 @@ local validator  = require("game.hand_validator")
 local scorer_mod = require("game.scorer")
 local fx_runner  = require("effects.effect_runner")
 local wall_mod   = require("game.wall")
+local content    = require("content.boons")
+local boons_init = require("effects.boons.init")
 
 local M = {}
 
@@ -28,6 +32,7 @@ local M = {}
 
 local AI_PACE_AUTO    <const> = 0.20    -- seconds between AI actions in auto mode
 local DEFAULT_SEED    <const> = 42
+local DEBUG_ROUND     <const> = 3       -- exercises Momentum surplus in S05.
 local LOG_MAX         <const> = 100
 local LOG_VISIBLE     <const> = 22
 
@@ -81,6 +86,7 @@ local record SceneState
    conservation_ok:  boolean
    conservation_msg: string
    ticks:            integer
+   selected_opening_tile_ids: {TileId}
 end
 
 local state: SceneState = nil
@@ -101,10 +107,24 @@ local function check_conservation()
    end
 end
 
+local function make_debug_run(seed: integer): RunState
+   local rs = run_state.new_run(rng_mod.from_seed(seed))
+   rs.round_index = DEBUG_ROUND
+   -- Use a compact debug boon set so opening_actions, Known Wall, active effect
+   -- counters, and surplus trimming are all visible before S06's real run flow.
+   rs.active_effects = {
+      content.activate_for("fresh_start", 1),
+      content.activate_for("third_eye", 1),
+      content.activate_for("momentum", 1),
+   }
+   return rs
+end
+
 local function reset(seed: integer)
+   boons_init.reset_and_register_all()
    state = {
       seed             = seed,
-      deal             = engine.new_deal(rng_mod.from_seed(seed)),
+      deal             = engine.new_deal_with_run(rng_mod.from_seed(seed), make_debug_run(seed)),
       step_mode        = false,
       wait_for_step    = false,
       ai_pace_left     = AI_PACE_AUTO,
@@ -113,6 +133,7 @@ local function reset(seed: integer)
       conservation_ok  = true,
       conservation_msg = "OK",
       ticks            = 0,
+      selected_opening_tile_ids = {},
    }
    push_log("sys", "deal opened (seed=" .. tostring(seed) .. ")")
    check_conservation()
@@ -145,6 +166,102 @@ local function next_eligible_reactor(deal: DealState): integer
    return 0
 end
 
+-- ── Opening-actions interaction ───────────────────────────────────────────
+
+local function opening_action_by_payload(payload_kind: string): EffectAction, boolean
+   local actions = fx_runner.collect_available_actions(state.deal, state.deal.dealer)
+   for _, a in ipairs(actions) do
+      if a.payload_kind == payload_kind then return a, true end
+   end
+   return {} as EffectAction, false
+end
+
+local function selected_contains(tile_id: TileId): boolean
+   for _, id in ipairs(state.selected_opening_tile_ids) do
+      if id == tile_id then return true end
+   end
+   return false
+end
+
+local function clear_opening_selection()
+   state.selected_opening_tile_ids = {}
+end
+
+local function toggle_opening_tile(slot: integer)
+   if (state.deal.phase as string) ~= "opening_actions" then return end
+   local tiles = state.deal.players[state.deal.dealer].hand.concealed_tiles
+   local t = tiles[slot]
+   if t == nil then return end
+   local out: {TileId} = {}
+   local removed = false
+   for _, id in ipairs(state.selected_opening_tile_ids) do
+      if id == t.tile_id then removed = true
+      else out[#out + 1] = id end
+   end
+   if not removed then
+      if #out >= 3 then
+         push_log("sys", "Fresh Start can swap at most 3 tiles")
+      else
+         out[#out + 1] = t.tile_id
+      end
+   end
+   state.selected_opening_tile_ids = out
+end
+
+local function apply_opening_transition(action: DealAction, label: string): boolean
+   local tr = engine.apply_action(state.deal, action)
+   if not tr.ok then
+      push_log("err", label .. " failed: " .. tr.error)
+      return false
+   end
+   state.deal = tr.deal
+   push_log("sys", label)
+   for _, e in ipairs(tr.events) do
+      push_log("ev", e.message)
+   end
+   state.ticks = state.ticks + 1
+   check_conservation()
+   return true
+end
+
+local function use_fresh_start()
+   if (state.deal.phase as string) ~= "opening_actions" then return end
+   local act, ok = opening_action_by_payload("swap_tiles")
+   if not ok then
+      push_log("sys", "Fresh Start is not available")
+      return
+   end
+   local ids: {TileId} = {}
+   for _, id in ipairs(state.selected_opening_tile_ids) do ids[#ids + 1] = id end
+   if apply_opening_transition(engine.use_effect_action(state.deal.dealer, act.active_effect_id, ids), "Fresh Start used") then
+      clear_opening_selection()
+   end
+end
+
+local function trim_opening_surplus()
+   if (state.deal.phase as string) ~= "opening_actions" then return end
+   local dealer = state.deal.dealer
+   local hand = state.deal.players[dealer].hand.concealed_tiles
+   if #hand <= 13 then
+      push_log("sys", "no opening surplus to trim")
+      return
+   end
+   local trim_id = hand[#hand].tile_id
+   if #state.selected_opening_tile_ids > 0 then
+      trim_id = state.selected_opening_tile_ids[1]
+   end
+   if apply_opening_transition(engine.discard_opening_surplus(dealer, trim_id), "trimmed opening surplus") then
+      clear_opening_selection()
+   end
+end
+
+local function confirm_opening()
+   if (state.deal.phase as string) ~= "opening_actions" then return end
+   if apply_opening_transition(engine.confirm_opening(state.deal.dealer), "opening confirmed") then
+      clear_opening_selection()
+   end
+end
+
 -- ── AI driver ─────────────────────────────────────────────────────────────
 
 local function describe_reasoning(r: AiReasoning, seat: integer): string
@@ -167,15 +284,13 @@ local function advance_one_action(): boolean
    local action: DealAction = nil
    local reason: AiReasoning = nil
 
-   if phase == "awaiting_draw" or phase == "awaiting_action" or phase == "opening_actions" then
+   if phase == "opening_actions" then
+      return false
+   end
+
+   if phase == "awaiting_draw" or phase == "awaiting_action" then
       seat = d.current_player
-      if phase == "opening_actions" then
-         -- Should not happen in S05 (no boons), but handle defensively.
-         action = engine.confirm_opening(seat)
-         reason = { tag = "confirm_opening", message = "confirm opening", ting_before = -100, ting_after = -100 }
-      else
-         action, reason = ai.decide_main(d, seat)
-      end
+      action, reason = ai.decide_main(d, seat)
    elseif phase == "reaction_window" then
       seat = next_eligible_reactor(d)
       if seat == 0 then
@@ -249,6 +364,29 @@ function M.keypressed(key: string)
       reset(state.seed)
       return
    end
+   if (state.deal.phase as string) == "opening_actions" then
+      local slot = tonumber(key)
+      if slot ~= nil and slot >= 1 and slot <= 9 then
+         toggle_opening_tile(slot as integer)
+         return
+      end
+      if key == "0" then
+         toggle_opening_tile(10)
+         return
+      end
+      if key == "u" then
+         use_fresh_start()
+         return
+      end
+      if key == "x" then
+         trim_opening_surplus()
+         return
+      end
+      if key == "c" then
+         confirm_opening()
+         return
+      end
+   end
 end
 
 -- ── Drawing ───────────────────────────────────────────────────────────────
@@ -273,8 +411,16 @@ end
 local function format_concealed(player: PlayerState, reveal: boolean): string
    if reveal then
       local parts: {string} = {}
-      for _, t in ipairs(player.hand.concealed_tiles) do
-         parts[#parts + 1] = tile_label(t)
+      for i, t in ipairs(player.hand.concealed_tiles) do
+         local label = tile_label(t)
+         if (state.deal.phase as string) == "opening_actions"
+            and player.is_human
+            and i <= 10
+         then
+            label = tostring(i % 10) .. ":" .. label
+            if selected_contains(t.tile_id) then label = "*" .. label end
+         end
+         parts[#parts + 1] = label
       end
       return table.concat(parts, " ")
    end
@@ -296,6 +442,28 @@ local function format_open_sets(player: PlayerState): string
       parts[#parts + 1] = format_set(s)
    end
    return table.concat(parts, " ")
+end
+
+local function opening_selection_label(): string
+   if #state.selected_opening_tile_ids == 0 then return "(none)" end
+   local labels: {string} = {}
+   local hand = state.deal.players[state.deal.dealer].hand.concealed_tiles
+   for _, id in ipairs(state.selected_opening_tile_ids) do
+      for _, t in ipairs(hand) do
+         if t.tile_id == id then
+            labels[#labels + 1] = tile_label(t)
+            break
+         end
+      end
+   end
+   return table.concat(labels, " ")
+end
+
+local function is_men_qian(player: PlayerState): boolean
+   for _, s in ipairs(player.hand.sets) do
+      if (s.visibility as string) == "open" then return false end
+   end
+   return true
 end
 
 local function ting_for(seat_index: integer): integer
@@ -355,6 +523,23 @@ local function draw_center(x: number, y: number, w: number, h: number)
    local d = state.deal
    local tx = x + 8
    local ty = y + 22
+   if (d.phase as string) == "opening_actions" then
+      local actions = fx_runner.collect_available_actions(d, d.dealer)
+      draw_text("opening actions", tx, ty); ty = ty + 16
+      draw_text("selected: " .. opening_selection_label(), tx, ty); ty = ty + 16
+      draw_text("actions available: " .. tostring(#actions), tx, ty); ty = ty + 16
+      for _, a in ipairs(actions) do
+         draw_text("  U " .. a.label, tx, ty); ty = ty + 14
+      end
+      local surplus = #d.players[d.dealer].hand.concealed_tiles - 13
+      if surplus > 0 then
+         draw_text("X trim surplus: " .. tostring(surplus), tx, ty); ty = ty + 16
+      else
+         draw_text("C confirm opening", tx, ty); ty = ty + 16
+      end
+      draw_text("1-0 toggle first 10 tiles", tx, ty); ty = ty + 16
+      return
+   end
    if d.has_pending_discard then
       local pd = d.pending_discard
       draw_text(string.format("pending discard: %s by p%d", tile_label(pd.tile), pd.discarder), tx, ty)
@@ -407,6 +592,24 @@ local function draw_log(x: number, y: number, w: number, h: number)
    end
 end
 
+local function score_with_modifiers(
+   d: DealState,
+   seat: integer,
+   shapes: {WinShape},
+   ctx: ScoreContext
+): ScoreResult, boolean
+   local out = scorer_mod.score_hand(shapes, ctx)
+   if not out.has_best then return {} as ScoreResult, false end
+   local best = fx_runner.apply_score_modifiers(d, ctx, shapes[1], out.candidates[1], seat)
+   for i = 2, #out.candidates do
+      local candidate = fx_runner.apply_score_modifiers(d, ctx, shapes[i], out.candidates[i], seat)
+      local best_rank = best.is_limit and 10000 or best.total_fan
+      local candidate_rank = candidate.is_limit and 10000 or candidate.total_fan
+      if candidate_rank > best_rank then best = candidate end
+   end
+   return best, true
+end
+
 local function draw_score_candidates_for(seat: integer, x: number, y: number): number
    local d = state.deal
    local p = d.players[seat]
@@ -420,16 +623,15 @@ local function draw_score_candidates_for(seat: integer, x: number, y: number): n
             incoming_tile = { tile_id = "" as TileId, kind_id = "" as TileKindId },
             has_incoming  = true,
             is_zi_mo      = false,
-            is_men_qian   = (#p.hand.sets == 0),
+            is_men_qian   = is_men_qian(p),
             is_hai_di     = false,
             is_gang_shang = false,
             is_qiang_gang = false,
             round_wind    = d.round_wind,
             seat_wind     = p.seat_wind,
          }
-         local out = scorer_mod.score_hand(shapes, ctx)
-         if out.has_best then
-            local final = fx_runner.apply_score_modifiers(d, ctx, shapes[1], out.candidates[1], seat)
+         local final, ok = score_with_modifiers(d, seat, shapes, ctx)
+         if ok then
             draw_text(string.format("    cand: +%s → fan=%d valid=%s", tile_label(incoming), final.total_fan, tostring(final.valid_hu)), x, y)
             y = y + 14
          end
@@ -474,7 +676,11 @@ end
 
 local function draw_hints(x: number, y: number)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
-   draw_text("F1 inspector | T toggle step | S step | R restart | ESC quit", x, y)
+   if (state.deal.phase as string) == "opening_actions" then
+      draw_text("1-0 select | U Fresh Start | X trim | C confirm | F1 inspector | R restart | ESC quit", x, y)
+   else
+      draw_text("F1 inspector | T toggle step | S step | R restart | ESC quit", x, y)
+   end
 end
 
 function M.draw()
