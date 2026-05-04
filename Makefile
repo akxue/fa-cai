@@ -22,7 +22,7 @@ build:
 		$(TL) gen "$$f" -o "$$out"; \
 	done
 	@mkdir -p $(SPEC_OUT)
-	@find $(SPEC_TL) -name '*_spec.tl' | while read f; do \
+	@find $(SPEC_TL) -name '*.tl' ! -name '*.d.tl' | while read f; do \
 		rel="$${f#$(SPEC_TL)/}"; \
 		out="$(SPEC_OUT)/$${rel%.tl}.lua"; \
 		mkdir -p "$$(dirname $$out)"; \
@@ -30,7 +30,7 @@ build:
 	done
 
 test: build
-	$(BUSTED) $(SPEC_OUT)/
+	$(BUSTED) --lpath "$(SRC_OUT)/?.lua;$(SRC_OUT)/?/init.lua;$(SPEC_OUT)/?.lua;$(SPEC_OUT)/?/init.lua" $(SPEC_OUT)/
 
 run: build
 	$(LOVE) $(SRC_OUT)/
