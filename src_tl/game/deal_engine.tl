@@ -539,6 +539,10 @@ end
 
 -- Apply an Open Kong claim after priority resolution.
 local function apply_open_kong(d: DealState, winner_index: integer): DealTransition
+   if wall_mod.remaining(d.wall) == 0 then
+      return wall_exhaustion(d)
+   end
+
    local discard_tile = d.pending_discard.tile
    local discarder    = d.pending_discard.discarder
    local h            = d.players[winner_index].hand
@@ -608,6 +612,10 @@ local function apply_all_pass(d: DealState): DealTransition
    end
 
    if d.has_pending_kong then
+      if wall_mod.remaining(d.wall) == 0 then
+         return wall_exhaustion(d)
+      end
+
       local declarer = d.pending_added_kong.declarer
       local tile_id  = d.pending_added_kong.tile_id
       local fourth, ft_ok = find_tile(d.players[declarer].hand.concealed_tiles, tile_id)
@@ -643,19 +651,26 @@ end
 
 -- ── Resolve reaction window ────────────────────────────────────────────────
 
--- Picks the highest-priority claim, ties broken by nearest-next from the actor.
-local function pick_winning_claim(claims: {PendingClaim}, actor: integer): PendingClaim
+-- Picks the highest-priority claim. Human Hu beats AI Hu per Milestone 1 prompt
+-- priority; other ties are broken by nearest-next from the actor.
+local function pick_winning_claim(claims: {PendingClaim}, actor: integer, players: {PlayerState}): PendingClaim
    local best = claims[1]
    local best_p = CLAIM_PRIORITY[best.kind] or 0
    local best_d = turn_distance(actor, best.player_index)
+   local best_human_hu = best.kind == "hu" and players[best.player_index].is_human
    for i = 2, #claims do
       local c = claims[i]
       local p = CLAIM_PRIORITY[c.kind] or 0
       local d = turn_distance(actor, c.player_index)
-      if p > best_p or (p == best_p and d < best_d) then
+      local c_human_hu = c.kind == "hu" and players[c.player_index].is_human
+      if p > best_p
+         or (p == best_p and c_human_hu and not best_human_hu)
+         or (p == best_p and c_human_hu == best_human_hu and d < best_d)
+      then
          best = c
          best_p = p
          best_d = d
+         best_human_hu = c_human_hu
       end
    end
    return best
@@ -668,7 +683,7 @@ local function resolve_window(d: DealState): DealTransition
 
    local actor = reaction_actor(d)
    if actor == -1 then return err(d, "resolve: no reaction actor") end
-   local winner = pick_winning_claim(d.pending_claims, actor)
+   local winner = pick_winning_claim(d.pending_claims, actor, d.players)
 
    if winner.kind == "hu" then
       if d.has_pending_kong then
@@ -915,6 +930,10 @@ local function handle_concealed_kong(deal: DealState, action: DeclareConcealedKo
    end
 
    local d = copy_deal(deal)
+   if wall_mod.remaining(d.wall) == 0 then
+      return wall_exhaustion(d)
+   end
+
    local h = d.players[action.player_index].hand
    local new_c, removed = remove_by_kind(h.concealed_tiles, action.tile_kind_id, 4)
    h.concealed_tiles = new_c

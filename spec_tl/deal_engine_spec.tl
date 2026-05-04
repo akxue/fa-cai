@@ -402,6 +402,39 @@ describe("deal_engine", function()
          assert.are.equal("deal_over", tr4.deal.phase as string)
          assert.are.equal(2, tr4.deal.deal_result.winner_player_index)
       end)
+
+      it("human Hu beats nearer AI Hu", function()
+         -- p2 discards tiao_3. p3 is nearest-next and can Hu, but p1 is human
+         -- and also claims Hu, so the human prompt priority wins.
+         local p1_ting: {Tile} = {
+            tile("tiao_1_a", "tiao_1"), tile("tiao_2_a", "tiao_2"), tile("tiao_3_a", "tiao_3"),
+            tile("tiao_4_a", "tiao_4"), tile("tiao_5_a", "tiao_5"), tile("tiao_6_a", "tiao_6"),
+            tile("tiao_7_a", "tiao_7"), tile("tiao_8_a", "tiao_8"), tile("tiao_9_a", "tiao_9"),
+            tile("tiao_1_b", "tiao_1"), tile("tiao_2_b", "tiao_2"),
+            tile("east_a", "east"), tile("east_b", "east"),
+         }
+         local p3_ting: {Tile} = {
+            tile("tiao_1_c", "tiao_1"), tile("tiao_2_c", "tiao_2"), tile("tiao_3_b", "tiao_3"),
+            tile("tiao_4_b", "tiao_4"), tile("tiao_5_b", "tiao_5"), tile("tiao_6_b", "tiao_6"),
+            tile("tiao_7_b", "tiao_7"), tile("tiao_8_b", "tiao_8"), tile("tiao_9_b", "tiao_9"),
+            tile("tiao_1_d", "tiao_1"), tile("tiao_2_d", "tiao_2"),
+            tile("east_c", "east"), tile("east_d", "east"),
+         }
+         local p2_hand = { tile("tiao_3_d", "tiao_3") }
+         local d = make_deal(p1_ting, p2_hand, p3_ting, {}, {}, "awaiting_action", 2, "tiao_3_d" as TileId, true)
+
+         local tr1 = engine.apply_action(d, engine.discard(2, "tiao_3_d" as TileId))
+         assert.is_true(tr1.ok, tr1.error)
+         local tr2 = engine.apply_action(tr1.deal, engine.declare_hu(3, "tiao_3_d" as TileId, false))
+         assert.is_true(tr2.ok, tr2.error)
+         local tr3 = engine.apply_action(tr2.deal, engine.declare_hu(1, "tiao_3_d" as TileId, false))
+         assert.is_true(tr3.ok, tr3.error)
+         local tr4 = engine.apply_action(tr3.deal, engine.pass_reaction(4))
+         assert.is_true(tr4.ok, tr4.error)
+
+         assert.are.equal("deal_over", tr4.deal.phase as string)
+         assert.are.equal(1, tr4.deal.deal_result.winner_player_index)
+      end)
    end)
 
    -- ── Wall exhaustion ───────────────────────────────────────────────────────
@@ -413,6 +446,30 @@ describe("deal_engine", function()
          assert.are.equal("deal_over", tr.deal.phase as string)
          assert.is_true(tr.deal.has_deal_result)
          assert.are.equal(-1, tr.deal.deal_result.winner_player_index)
+      end)
+
+      it("open kong on empty supplement wall exhausts before kong resolves", function()
+         local p1_hand = { tile("tiao_3_d", "tiao_3") }
+         local p3_hand = {
+            tile("tiao_3_a", "tiao_3"),
+            tile("tiao_3_b", "tiao_3"),
+            tile("tiao_3_c", "tiao_3"),
+         }
+         local d = make_deal(p1_hand, {}, p3_hand, {}, {}, "awaiting_action", 1, "tiao_3_d" as TileId, true)
+
+         local tr1 = engine.apply_action(d, engine.discard(1, "tiao_3_d" as TileId))
+         assert.is_true(tr1.ok, tr1.error)
+         local tr2 = engine.apply_action(tr1.deal, engine.declare_open_kong(3, "tiao_3_d" as TileId))
+         assert.is_true(tr2.ok, tr2.error)
+         local tr3 = engine.apply_action(tr2.deal, engine.pass_reaction(2))
+         assert.is_true(tr3.ok, tr3.error)
+         local tr4 = engine.apply_action(tr3.deal, engine.pass_reaction(4))
+         assert.is_true(tr4.ok, tr4.error)
+
+         assert.are.equal("deal_over", tr4.deal.phase as string)
+         assert.are.equal(-1, tr4.deal.deal_result.winner_player_index)
+         assert.are.equal(0, #tr4.deal.players[3].hand.sets)
+         assert.are.equal(3, #tr4.deal.players[3].hand.concealed_tiles)
       end)
 
       it("tile conservation holds across many turns", function()
@@ -493,6 +550,18 @@ describe("deal_engine", function()
          assert.are.equal("concealed", tr.deal.players[1].hand.sets[1].visibility as string)
          assert.is_true(tr.deal.last_draw_was_supplement)
       end)
+
+      it("empty supplement wall exhausts before concealed kong resolves", function()
+         local hand14 = parse("1111t 234t 567t 89w 1w 5w")
+         local d = make_deal(hand14, {}, {}, {}, {}, "awaiting_action", 1, "wan_5_a" as TileId, true)
+
+         local tr = engine.apply_action(d, engine.declare_concealed_kong(1, "tiao_1" as TileKindId))
+         assert.is_true(tr.ok, tr.error)
+         assert.are.equal("deal_over", tr.deal.phase as string)
+         assert.are.equal(-1, tr.deal.deal_result.winner_player_index)
+         assert.are.equal(0, #tr.deal.players[1].hand.sets)
+         assert.are.equal(14, #tr.deal.players[1].hand.concealed_tiles)
+      end)
    end)
 
    -- ── Added Kong + Qiang Gang ──────────────────────────────────────────────
@@ -554,6 +623,60 @@ describe("deal_engine", function()
          assert.are.equal("kong", d2.players[1].hand.sets[1].kind as string)
          assert.are.equal(4, #d2.players[1].hand.sets[1].tiles)
          assert.is_true(d2.last_draw_was_supplement)
+      end)
+
+      it("empty supplement wall exhausts before added kong upgrade resolves", function()
+         local p1_concealed = parse("234t 678t 1w 23w 4b")
+         p1_concealed[#p1_concealed + 1] = tile("tiao_5_d", "tiao_5")
+         local p1_state: PlayerState = {
+            hand = {
+               concealed_tiles = p1_concealed,
+               sets = {
+                  {
+                     kind = "peng" as TileSetKind,
+                     visibility = "open" as SetVisibility,
+                     tiles = { tile("tiao_5_a", "tiao_5"), tile("tiao_5_b", "tiao_5"), tile("tiao_5_c", "tiao_5") },
+                     called_from = 4,
+                  },
+               },
+               discards = {},
+            },
+            opening_trim = {},
+            seat_wind = "east" as Wind,
+            is_human = true,
+         }
+         local empty: PlayerState = {
+            hand = { concealed_tiles = {}, sets = {}, discards = {} },
+            opening_trim = {}, seat_wind = "south" as Wind, is_human = false,
+         }
+         local d: DealState = {
+            players = { p1_state, empty,
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false },
+            },
+            wall = { tiles = {} },
+            phase = "awaiting_action" as DealPhase,
+            current_player = 1, dealer = 1, round_wind = "east" as Wind,
+            pending_discard = { tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }, discarder = 0 },
+            has_pending_discard = false,
+            pending_added_kong = { tile_id = "" as TileId, declarer = 0 }, has_pending_kong = false,
+            known_wall_tile_ids = {}, rng = rng_mod.from_seed(1),
+            deal_result = { winner_player_index = 0, won_by_zi_mo = false,
+               score_result = { win_shape_kind="" as WinShapeKind, reasons={}, total_fan=0, is_limit=false, rating=""as Rating, valid_hu=false },
+               has_score_result = false },
+            has_deal_result = false, reaction_passes = {}, pending_claims = {},
+            last_draw_was_supplement = false, last_drawn_tile_id = "tiao_5_d" as TileId, has_last_drawn = true,
+         }
+
+         local tr1 = engine.apply_action(d, engine.declare_added_kong(1, "tiao_5_d" as TileId))
+         assert.is_true(tr1.ok, tr1.error)
+         local d2 = pass_all(tr1.deal, {2, 3, 4})
+
+         assert.are.equal("deal_over", d2.phase as string)
+         assert.are.equal(-1, d2.deal_result.winner_player_index)
+         assert.are.equal("peng", d2.players[1].hand.sets[1].kind as string)
+         assert.are.equal(3, #d2.players[1].hand.sets[1].tiles)
+         assert.are.equal(11, #d2.players[1].hand.concealed_tiles)
       end)
    end)
 
