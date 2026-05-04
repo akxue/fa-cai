@@ -310,11 +310,19 @@ local function apply_score_modifiers(
    winner_index:   integer
 ): ScoreResult
    if not output.has_best then return output.best end
-   local best_shape = shapes[1]
-   for i, c in ipairs(output.candidates) do
-      if c == output.best then best_shape = shapes[i]; break end
+
+   local best = fx_runner.apply_score_modifiers(deal, ctx, shapes[1], output.candidates[1], winner_index)
+   for i = 2, #output.candidates do
+      local candidate = fx_runner.apply_score_modifiers(deal, ctx, shapes[i], output.candidates[i], winner_index)
+      local best_rank = best.total_fan
+      local candidate_rank = candidate.total_fan
+      if best.is_limit then best_rank = 10000 end
+      if candidate.is_limit then candidate_rank = 10000 end
+      if candidate_rank > best_rank then
+         best = candidate
+      end
    end
-   return fx_runner.apply_score_modifiers(deal, ctx, best_shape, output.best, winner_index)
+   return best
 end
 
 -- Re-evaluates valid_hu after boon ScoreReasons; mirrors scorer's threshold.
@@ -584,7 +592,7 @@ local function apply_hu_on_discard(d: DealState, winner_index: integer): DealTra
    local ctx      = build_score_ctx(d, winner_index, false, false, false)
    local shapes   = validator.find_win_shapes(p.hand.concealed_tiles, incoming, p.hand.sets)
    local output   = scorer_mod.score_hand(shapes, ctx)
-   if not output.has_best or not output.best.valid_hu then
+   if not output.has_best then
       return err(d, "resolve: hu on discard no longer valid")
    end
    local final = apply_score_modifiers(d, ctx, shapes, output, winner_index)
@@ -615,7 +623,7 @@ local function apply_qiang_gang(d: DealState, winner_index: integer): DealTransi
    local ctx      = build_score_ctx(d, winner_index, false, false, true)
    local shapes   = validator.find_win_shapes(p.hand.concealed_tiles, kong_tile, p.hand.sets)
    local output   = scorer_mod.score_hand(shapes, ctx)
-   if not output.has_best or not output.best.valid_hu then
+   if not output.has_best then
       return err(d, "resolve: qiang gang no longer valid")
    end
    local final = apply_score_modifiers(d, ctx, shapes, output, winner_index)
@@ -864,7 +872,7 @@ local function handle_hu(deal: DealState, action: DeclareHuAction): DealTransiti
       local shapes  = validator.find_win_shapes(rest, incoming, p.hand.sets)
       local ctx     = build_score_ctx(deal, action.player_index, true, deal.last_draw_was_supplement, false)
       local output  = scorer_mod.score_hand(shapes, ctx)
-      if not output.has_best or not output.best.valid_hu then
+      if not output.has_best then
          return err(deal, "zi mo: not a valid hu")
       end
       local d = copy_deal(deal)
@@ -900,7 +908,8 @@ local function handle_hu(deal: DealState, action: DeclareHuAction): DealTransiti
       local ctx      = build_score_ctx(deal, action.player_index, false, false, false)
       local shapes   = require("game.hand_validator").find_win_shapes(p.hand.concealed_tiles, incoming, p.hand.sets)
       local output   = scorer_mod.score_hand(shapes, ctx)
-      if not output.has_best or not output.best.valid_hu then
+      local final    = apply_score_modifiers(deal, ctx, shapes, output, action.player_index)
+      if not output.has_best or not score_passes_threshold(final) then
          return err(deal, "hu on discard: not a valid hu")
       end
    elseif deal.has_pending_kong then
@@ -914,7 +923,8 @@ local function handle_hu(deal: DealState, action: DeclareHuAction): DealTransiti
       local ctx    = build_score_ctx(deal, action.player_index, false, false, true)
       local shapes = require("game.hand_validator").find_win_shapes(p.hand.concealed_tiles, kong_tile, p.hand.sets)
       local output = scorer_mod.score_hand(shapes, ctx)
-      if not output.has_best or not output.best.valid_hu then
+      local final  = apply_score_modifiers(deal, ctx, shapes, output, action.player_index)
+      if not output.has_best or not score_passes_threshold(final) then
          return err(deal, "qiang gang: not a valid hu")
       end
    else
@@ -1167,6 +1177,17 @@ local function handle_use_effect_action(deal: DealState, action: UseEffectAction
    local mod = registry.get(active.effect_id)
    if mod == nil or mod.on_use_action == nil then
       return err(deal, "use_effect_action: effect has no on_use_action handler: " .. active.effect_id)
+   end
+   local available = false
+   local actions = fx_runner.collect_available_actions(deal, action.player_index)
+   for _, effect_action in ipairs(actions) do
+      if effect_action.active_effect_id == action.active_effect_id then
+         available = true
+         break
+      end
+   end
+   if not available then
+      return err(deal, "use_effect_action: effect action is not available: " .. active.effect_id)
    end
    local d = copy_deal(deal)
    local uctx: EffectUseContext = {

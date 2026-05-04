@@ -354,6 +354,29 @@ describe("apply_score_modifiers (3-fan threshold)", function()
       assert.are.equal(2, final.total_fan)
       assert.is_false(final.valid_hu)
    end)
+
+   it("lets boon fan lift a valid Hu shape to the 3-fan floor", function()
+      local rs = make_run_with_boons({"still_water"}, 1)
+      local d = engine.new_deal_with_run(rng_mod.from_seed(7), rs)
+      d.players[1].hand.concealed_tiles = parse("123t 456t 789t 123w 5b")
+      d.players[4].hand.concealed_tiles = { tile("bing_5_a", "bing_5") }
+      d.players[2].hand.concealed_tiles = {}
+      d.players[3].hand.concealed_tiles = {}
+      d.phase = "awaiting_action" as DealPhase
+      d.current_player = 4
+
+      local tr1 = engine.apply_action(d, engine.discard(4, "bing_5_a" as TileId))
+      assert.is_true(tr1.ok, tr1.error)
+      local tr2 = engine.apply_action(tr1.deal, engine.pass_reaction(2))
+      assert.is_true(tr2.ok, tr2.error)
+      local tr3 = engine.apply_action(tr2.deal, engine.pass_reaction(3))
+      assert.is_true(tr3.ok, tr3.error)
+      local tr4 = engine.apply_action(tr3.deal, engine.declare_hu(1, "bing_5_a" as TileId, false))
+      assert.is_true(tr4.ok, tr4.error)
+      assert.are.equal("deal_over", tr4.deal.phase as string)
+      assert.are.equal(3, tr4.deal.deal_result.score_result.total_fan)
+      assert.is_true(tr4.deal.deal_result.score_result.valid_hu)
+   end)
 end)
 
 describe("momentum", function()
@@ -458,13 +481,19 @@ describe("fresh_start", function()
       local swap_id = d.players[1].hand.concealed_tiles[1].tile_id
       local tr1 = engine.apply_action(d, engine.use_effect_action(1, "fresh_start_1", { swap_id }))
       assert.is_true(tr1.ok, tr1.error)
-      -- Second call: on_use_action returns no replace command (used flag set).
       local swap_id2 = tr1.deal.players[1].hand.concealed_tiles[1].tile_id
       local tr2 = engine.apply_action(tr1.deal, engine.use_effect_action(1, "fresh_start_1", { swap_id2 }))
-      assert.is_true(tr2.ok, tr2.error)
-      -- No-op: hand still 13, used flag still true.
-      assert.are.equal(13, #tr2.deal.players[1].hand.concealed_tiles)
-      assert.is_true(tr2.deal.effect_states["fresh_start_1"].used_this_deal)
+      assert.is_false(tr2.ok)
+   end)
+
+   it("is rejected outside opening_actions", function()
+      local rs = make_run_with_boons({"fresh_start"}, 1)
+      local d = engine.new_deal_with_run(rng_mod.from_seed(7), rs)
+      local tr1 = engine.apply_action(d, engine.confirm_opening(1))
+      assert.is_true(tr1.ok, tr1.error)
+      local swap_id = tr1.deal.players[1].hand.concealed_tiles[1].tile_id
+      local tr2 = engine.apply_action(tr1.deal, engine.use_effect_action(1, "fresh_start_1", { swap_id }))
+      assert.is_false(tr2.ok)
    end)
 end)
 
