@@ -385,12 +385,17 @@ describe("deal_engine", function()
 
       it("nearest-next wins among same-priority Hu claims", function()
          -- Both p2 and p3 declare Hu on p1's discard. p2 (nearest-next) should win.
-         local ting = parse("123t 456t 789t 12t 2E")
+         local p2_ting = parse("123t 456t 789t 12t 2E")
+         local p3_ting: {Tile} = {
+            tile("wan_1_a", "wan_1"), tile("wan_1_b", "wan_1"), tile("wan_1_c", "wan_1"),
+            tile("wan_2_a", "wan_2"), tile("wan_2_b", "wan_2"), tile("wan_2_c", "wan_2"),
+            tile("wan_3_a", "wan_3"), tile("wan_3_b", "wan_3"), tile("wan_3_c", "wan_3"),
+            tile("wan_4_a", "wan_4"), tile("wan_4_b", "wan_4"), tile("wan_4_c", "wan_4"),
+            tile("tiao_3_b", "tiao_3"),
+         }
          local p1_hand = { tile("tiao_3_c", "tiao_3") }
-         local d = make_deal(p1_hand, ting, ting, {}, {}, "awaiting_action", 1, "tiao_3_c" as TileId, true)
+         local d = make_deal(p1_hand, p2_ting, p3_ting, {}, {}, "awaiting_action", 1, "tiao_3_c" as TileId, true)
 
-         -- WARNING: this scenario duplicates tile ids across p2 and p3, so
-         -- tile-conservation would fail. We're isolating the priority logic.
          local tr1 = engine.apply_action(d, engine.discard(1, "tiao_3_c" as TileId))
          local tr2 = engine.apply_action(tr1.deal, engine.declare_hu(3, "tiao_3_c" as TileId, false))
          assert.is_true(tr2.ok, tr2.error)
