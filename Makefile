@@ -1,8 +1,6 @@
-# PATH prefix so tl/busted installed under lua@5.4 are found without shell config.
-export PATH := /opt/homebrew/opt/lua@5.4/bin:$(PATH)
-
-TL     := tl
-BUSTED := busted
+LUA54  := /opt/homebrew/opt/lua@5.4/bin
+TL     := $(LUA54)/tl
+BUSTED := $(LUA54)/busted
 LOVE   := love
 
 SRC_TL   := src_tl
