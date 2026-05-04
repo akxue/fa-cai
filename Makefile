@@ -3,10 +3,11 @@ TL     := $(LUA54)/tl
 BUSTED := $(LUA54)/busted
 LOVE   := love
 
-SRC_TL   := src_tl
-SRC_OUT  := src
-SPEC_TL  := spec_tl
-SPEC_OUT := spec
+SRC_TL    := src_tl
+SRC_OUT   := src
+SPEC_TL   := spec_tl
+SPEC_OUT  := spec
+LUA_COMPAT := lua_compat
 
 .PHONY: check build test run clean
 
@@ -28,9 +29,10 @@ build:
 		mkdir -p "$$(dirname $$out)"; \
 		$(TL) --global-env-def spec_tl/support/busted gen "$$f" -o "$$out"; \
 	done
+	@cp $(LUA_COMPAT)/bit32.lua $(SRC_OUT)/bit32.lua
 
 test: build
-	$(BUSTED) --lpath "$(SRC_OUT)/?.lua;$(SRC_OUT)/?/init.lua;$(SPEC_OUT)/?.lua;$(SPEC_OUT)/?/init.lua" $(SPEC_OUT)/
+	$(BUSTED) --lpath "$(LUA_COMPAT)/?.lua;$(SRC_OUT)/?.lua;$(SRC_OUT)/?/init.lua;$(SPEC_OUT)/?.lua;$(SPEC_OUT)/?/init.lua" $(SPEC_OUT)/
 
 run: build
 	$(LOVE) $(SRC_OUT)/

@@ -182,4 +182,57 @@ describe("ting_distance", function()
 
    end)
 
+   describe("ting_distance_live", function()
+
+      -- Build a live_counts map starting at 4 per kind (all live), with the
+      -- given overrides applied.
+      local function live_with(overrides: {string:integer}): {string:integer}
+         local kinds: {string} = {
+            "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+            "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
+            "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+            "east","south","west","north","fa_cai","hong_zhong","bai_ban",
+         }
+         local out: {string:integer} = {}
+         for _, k in ipairs(kinds) do out[k] = 4 end
+         for k, v in pairs(overrides) do out[k] = v end
+         return out
+      end
+
+      it("with all-live counts matches plain ting_distance", function()
+         local hand = parse("123t 456t 789t 12w 5w 5w")
+         local plain = td.ting_distance(hand, {})
+         local live  = td.ting_distance_live(hand, {}, live_with({}))
+         assert.are.equal(plain, live)
+      end)
+
+      it("returns ting (-1) when the winning tile kind has live copies", function()
+         -- 13-tile ting hand waiting on wan_3.
+         local hand = parse("123t 456t 789t 12w 5w 5w")
+         local d = td.ting_distance_live(hand, {}, live_with({}))
+         assert.are.equal(-1, d)
+      end)
+
+      it("loses ting when all winning tiles are dead", function()
+         -- Same hand, but kill wan_3 globally — no path to complete the
+         -- standard wan-suit chi survives. Seven Pairs / Thirteen Orphans
+         -- are also unreachable from this hand.
+         local hand = parse("123t 456t 789t 12w 5w 5w")
+         local d = td.ting_distance_live(hand, {}, live_with({ wan_3 = 0 }))
+         assert.is_true(d > -1, "expected ting > -1 with dead wait, got " .. tostring(d))
+      end)
+
+      it("loses ting when the unique pair-completer kind is dead", function()
+         -- 4 chis + lone bing_5 (13 tiles). Standard ting waits exactly on
+         -- bing_5 to form the pair. No other standard decomposition works
+         -- because all four 3-tile groups are already complete chis.
+         local hand = parse("123t 456t 789t 234t 5b")
+         assert.are.equal(-1, td.ting_distance(hand, {}))
+         -- Kill bing_5 → that pair-completer is dead. Special shapes are
+         -- impractical from this hand. Live ting must rise above -1.
+         local dead = td.ting_distance_live(hand, {}, live_with({ bing_5 = 0 }))
+         assert.is_true(dead > -1, "expected dead pair-completer to break ting, got " .. tostring(dead))
+      end)
+   end)
+
 end)

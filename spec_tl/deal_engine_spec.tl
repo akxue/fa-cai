@@ -78,7 +78,11 @@ local function make_deal(
       round_wind               = "east" as Wind,
       pending_discard          = { tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }, discarder = 0 },
       has_pending_discard      = false,
-      pending_added_kong       = { tile_id = "" as TileId, declarer = 0 },
+      pending_added_kong       = {
+         tile_id  = "" as TileId,
+         tile     = { tile_id = "" as TileId, kind_id = "" as TileKindId },
+         declarer = 0,
+      },
       has_pending_kong         = false,
       known_wall_tile_ids      = {},
       rng                      = rng_mod.from_seed(1),
@@ -607,7 +611,11 @@ describe("deal_engine", function()
             current_player = 1, dealer = 1, round_wind = "east" as Wind,
             pending_discard = { tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }, discarder = 0 },
             has_pending_discard = false,
-            pending_added_kong = { tile_id = "" as TileId, declarer = 0 }, has_pending_kong = false,
+            pending_added_kong = {
+               tile_id  = "" as TileId,
+               tile     = { tile_id = "" as TileId, kind_id = "" as TileKindId },
+               declarer = 0,
+            }, has_pending_kong = false,
             known_wall_tile_ids = {}, rng = rng_mod.from_seed(1),
             deal_result = { winner_player_index = 0, won_by_zi_mo = false,
                score_result = { win_shape_kind="" as WinShapeKind, reasons={}, total_fan=0, is_limit=false, rating=""as Rating, valid_hu=false },
@@ -621,6 +629,8 @@ describe("deal_engine", function()
          assert.is_true(tr1.ok, tr1.error)
          assert.are.equal("reaction_window", tr1.deal.phase as string)
          assert.is_true(tr1.deal.has_pending_kong)
+         assert.are.equal("tiao_5_d", tr1.deal.pending_added_kong.tile.tile_id as string)
+         assert.are.equal("tiao_5", tr1.deal.pending_added_kong.tile.kind_id as string)
 
          local d2 = pass_all(tr1.deal, {2, 3, 4})
          -- After all pass: peng → kong, supplement drawn
@@ -666,7 +676,11 @@ describe("deal_engine", function()
             current_player = 1, dealer = 1, round_wind = "east" as Wind,
             pending_discard = { tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }, discarder = 0 },
             has_pending_discard = false,
-            pending_added_kong = { tile_id = "" as TileId, declarer = 0 }, has_pending_kong = false,
+            pending_added_kong = {
+               tile_id  = "" as TileId,
+               tile     = { tile_id = "" as TileId, kind_id = "" as TileKindId },
+               declarer = 0,
+            }, has_pending_kong = false,
             known_wall_tile_ids = {}, rng = rng_mod.from_seed(1),
             deal_result = { winner_player_index = 0, won_by_zi_mo = false,
                score_result = { win_shape_kind="" as WinShapeKind, reasons={}, total_fan=0, is_limit=false, rating=""as Rating, valid_hu=false },

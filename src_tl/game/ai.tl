@@ -33,6 +33,39 @@ local M = {}
 local PLAYER_COUNT <const> = 4
 local NA <const> = -100
 
+-- ── Live-tile bookkeeping ─────────────────────────────────────────────────
+-- Returns a `live_counts` map of how many copies of each kind are still
+-- drawable from the AI's perspective: 4 minus visible copies in (own
+-- concealed, all sets across all players, all discards across all players,
+-- pending discard if any). Other players' concealed tiles are intentionally
+-- not subtracted — they are not visible to this AI.
+
+local ALL_KINDS: {string} = {
+   "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+   "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
+   "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+   "east","south","west","north","fa_cai","hong_zhong","bai_ban",
+}
+
+function M.compute_live_counts(deal: DealState, player_index: integer): {string:integer}
+   local live: {string:integer} = {}
+   for _, k in ipairs(ALL_KINDS) do live[k] = 4 end
+   local function dec(k: TileKindId)
+      local s = k as string
+      live[s] = (live[s] or 0) - 1
+   end
+   for _, t in ipairs(deal.players[player_index].hand.concealed_tiles) do dec(t.kind_id) end
+   for i = 1, PLAYER_COUNT do
+      local p = deal.players[i]
+      for _, s in ipairs(p.hand.sets) do
+         for _, t in ipairs(s.tiles) do dec(t.kind_id) end
+      end
+      for _, t in ipairs(p.hand.discards) do dec(t.kind_id) end
+   end
+   if deal.has_pending_discard then dec(deal.pending_discard.tile.kind_id) end
+   return live
+end
+
 -- ── Score-context builder ──────────────────────────────────────────────────
 -- Mirrors deal_engine.build_score_ctx so AI Hu legality matches the engine
 -- exactly. is_men_qian is derived from open-set visibility.
@@ -130,20 +163,24 @@ end
 
 -- ── Discard heuristic ─────────────────────────────────────────────────────
 -- For each candidate concealed tile, simulate removal and compute the
--- resulting ting distance over all shapes. Pick the tile whose removal
--- yields the lowest ting distance. Ties broken by tile_id ascending for
--- determinism.
+-- resulting LIVE ting distance over all shapes. Live ting prunes paths
+-- whose required tiles are no longer drawable (already in some discard pile,
+-- open set, or the AI's own hand) — this avoids the AI committing to a
+-- "ting" hand that will never complete because all winning tiles are dead.
 
 local function pick_best_discard(deal: DealState, player_index: integer): TileId, integer, integer
    local p = deal.players[player_index]
    local concealed = p.hand.concealed_tiles
-   local before = td.ting_distance(concealed, p.hand.sets)
+   local live = M.compute_live_counts(deal, player_index)
+   local before = td.ting_distance_live(concealed, p.hand.sets, live)
 
    local best_id: TileId = concealed[1].tile_id
    local best_after = 1000
    for _, t in ipairs(concealed) do
       local rest = tiles_without_id(concealed, t.tile_id)
-      local after = td.ting_distance(rest, p.hand.sets)
+      -- After this hypothetical discard, the tile sits in the discard pile —
+      -- still not drawable, so the live count is unchanged from `live`.
+      local after = td.ting_distance_live(rest, p.hand.sets, live)
       if after < best_after or (after == best_after and (t.tile_id as string) < (best_id as string)) then
          best_id = t.tile_id
          best_after = after
@@ -194,7 +231,8 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
 
    if phase == "awaiting_draw" then
       local p = deal.players[player_index]
-      local before = td.ting_distance(p.hand.concealed_tiles, p.hand.sets)
+      local live = M.compute_live_counts(deal, player_index)
+      local before = td.ting_distance_live(p.hand.concealed_tiles, p.hand.sets, live)
       return engine.draw(player_index), {
          tag         = "draw",
          message     = "draw (ting=" .. tostring(before) .. ")",
@@ -243,7 +281,8 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       -- worsen ting distance (it shouldn't, since the four become a set).
       local quad_kind, has_quad = find_concealed_quad_kind(concealed)
       if has_quad then
-         local before = td.ting_distance(concealed, p.hand.sets)
+         local live = M.compute_live_counts(deal, player_index)
+         local before = td.ting_distance_live(concealed, p.hand.sets, live)
          local rest   = tiles_without_kind(concealed, quad_kind, 4)
          local fake_set: TileSet = {
             kind        = "kong" as TileSetKind,
@@ -254,7 +293,7 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
          local sets_after: {TileSet} = {}
          for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
          sets_after[#sets_after + 1] = fake_set
-         local after = td.ting_distance(rest, sets_after)
+         local after = td.ting_distance_live(rest, sets_after, live)
          if after <= before then
             return engine.declare_concealed_kong(player_index, quad_kind), {
                tag         = "concealed_kong",
@@ -321,23 +360,15 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       end
    elseif deal.has_pending_kong then
       if player_index ~= deal.pending_added_kong.declarer then
-         local declarer = deal.pending_added_kong.declarer
-         local kong_tile_id = deal.pending_added_kong.tile_id
-         local declarer_concealed = deal.players[declarer].hand.concealed_tiles
-         local kong_tile: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
-         for _, t in ipairs(declarer_concealed) do
-            if t.tile_id == kong_tile_id then kong_tile = t; break end
-         end
-         if (kong_tile.tile_id as string) ~= "" then
-            local ok, _final = evaluate_hu(deal, player_index, concealed, kong_tile, false, false, true)
-            if ok then
-               return engine.declare_hu(player_index, kong_tile_id, false), {
-                  tag         = "hu_on_discard",
-                  message     = "qiang gang on " .. (kong_tile.kind_id as string),
-                  ting_before = NA,
-                  ting_after  = NA,
-               }
-            end
+         local kong_tile = deal.pending_added_kong.tile
+         local ok, _final = evaluate_hu(deal, player_index, concealed, kong_tile, false, false, true)
+         if ok then
+            return engine.declare_hu(player_index, deal.pending_added_kong.tile_id, false), {
+               tag         = "hu_on_discard",
+               message     = "qiang gang on " .. (kong_tile.kind_id as string),
+               ting_before = NA,
+               ting_after  = NA,
+            }
          end
       end
       -- No legal Peng/Chi/Open Kong on a pending added kong.
@@ -361,7 +392,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       end
       local discarded = deal.pending_discard.tile
       local discarder = deal.pending_discard.discarder
-      local before = td.ting_distance(concealed, p.hand.sets)
+      local live   = M.compute_live_counts(deal, player_index)
+      local before = td.ting_distance_live(concealed, p.hand.sets, live)
 
       -- Open Kong: 3 in hand + 1 from discard. Set absorbs all 3 matching tiles.
       if calls_mod.can_open_kong(discarded, concealed, discarder, player_index) then
@@ -374,7 +406,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             tiles       = {},
             called_from = discarder,
          }
-         local after = td.ting_distance(rest, sets_after)
+         local after = td.ting_distance_live(rest, sets_after, live)
          if after <= before then
             return engine.declare_open_kong(player_index, discarded.tile_id), {
                tag         = "open_kong",
@@ -396,7 +428,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             tiles       = {},
             called_from = discarder,
          }
-         local after = td.ting_distance(rest, sets_after)
+         local after = td.ting_distance_live(rest, sets_after, live)
          if after <= before then
             return engine.declare_peng(player_index, discarded.tile_id), {
                tag         = "peng",
@@ -421,7 +453,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
                tiles       = {},
                called_from = discarder,
             }
-            local after = td.ting_distance(rest, sets_after)
+            local after = td.ting_distance_live(rest, sets_after, live)
             if after <= before then
                return engine.declare_chi(player_index, discarded.tile_id, pair), {
                   tag         = "chi",

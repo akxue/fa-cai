@@ -41,6 +41,7 @@ end
 
 global record PendingAddedKong
    tile_id:       TileId
+   tile:          Tile
    declarer:      integer
 end
 
