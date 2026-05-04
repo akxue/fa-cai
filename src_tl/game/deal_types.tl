@@ -52,6 +52,7 @@ global record DealResult
    winner_player_index: integer   -- -1 = wall exhaustion, no winner
    won_by_zi_mo:        boolean
    score_result:        ScoreResult   -- defined below; forward ref resolved at use
+   has_score_result:    boolean
 end
 
 global record DealState
@@ -69,6 +70,15 @@ global record DealState
    rng:                  RngState
    deal_result:          DealResult
    has_deal_result:      boolean
+   reaction_passes:      {integer}   -- player indices who passed in current reaction window
+   last_draw_was_supplement: boolean
+   last_drawn_tile_id:   TileId      -- tile drawn on the most recent draw (for zi mo)
+   has_last_drawn:       boolean
+end
+
+-- Placeholder — filled out in S04. Every DealAction record carries a kind field.
+global record ActiveEffectState
+   active_effect_id: string
 end
 
 -- ── Win shapes ────────────────────────────────────────────────────────────

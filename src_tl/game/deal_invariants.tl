@@ -48,6 +48,9 @@ function M.validate_tile_conservation(deal: DealState): InvariantResult
       counts[id] = (counts[id] or 0) + 1
    end
 
+   -- The pending added-kong tile stays in concealed_tiles during the Qiang Gang
+   -- window, so no extra accounting is needed here.
+
    -- Check exactly 136 unique tiles, each appearing exactly once.
    local total = 0
    local duplicates: {string} = {}
