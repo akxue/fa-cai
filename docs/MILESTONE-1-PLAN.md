@@ -1495,7 +1495,99 @@ Before starting `S06`, the following must be demonstrable through the debug UI:
 
 If any of these fail, stay in `S05` until resolved. Do not start the playable table slice with a broken deal engine.
 
-### S06: Playable Round 1 UI
+### S06: Smart AI (Target-Pattern Heuristic)
+
+Status: `pending`
+
+Goal: replace the ting-only vanilla AI with a target-pattern strategy that respects the 3 fan minimum, choosing among `dui_dui_hu`, `hun_yi_se`, `qing_yi_se`, and `default`. Migrate Known Wall to per-player state so future AI-owned info effects (boons, opponent packages) need no schema change.
+
+Why this comes now: the S05 vanilla AI minimized live-ting only. Playtesting (seed=42) showed AIs reach ting on 1-fan paths and exhaust the wall because the heuristic doesn't reason about whether the chosen path can clear the 3-fan minimum. The target-aware heuristic also lays the groundwork for opponent packages in later milestones — a "package" is just a non-neutral `AiPersonality`.
+
+Dependencies:
+
+- `S05`
+
+Owned areas:
+
+- `src_tl/game/ai.tl`
+- `src_tl/game/ai_strategy.tl` (new)
+- `src_tl/game/deal_types.tl` (Known Wall migration)
+- `src_tl/game/deal_engine.tl` (Known Wall migration)
+- `src_tl/effects/effect_runner.tl` (Known Wall migration)
+- `src_tl/scenes/table_scene.tl` (inspector target line)
+- `spec_tl/ai_strategy_spec.tl` (new)
+- `spec_tl/ai_spec.tl`, `spec_tl/effects_spec.tl`, `spec_tl/deal_engine_spec.tl`
+
+Tasks (single combined PR):
+
+Known Wall per-player migration (no runtime behavior change for the player; spec fixtures update mechanically):
+
+- `T01`: Move `known_wall_tile_ids` from `DealState` onto `PlayerState`.
+- `T02`: Update `RevealWallFrontCommand` dispatch to write to the owning player's list (uses the active effect's `owner_player_index`).
+- `T03`: Update Fresh Start's reshuffle clear to target the owning player's list.
+- `T04`: Update normal draw to remove the drawn tile id from the drawer's list only.
+- `T05`: Update inspector to read `players[i].known_wall_tile_ids` (shows player-1 only in M1).
+- `T06`: Relax the AI rule to "AI may read its own seat's `known_wall_tile_ids`" (forward-compat-only — M1 vanilla AIs do not exercise this).
+- `T07`: Update specs that reference the field directly to use the per-player view.
+- `T07a`: Migration completeness check — `rg known_wall_tile_ids src_tl spec_tl` returns only per-player references; no leftover `deal.known_wall_tile_ids` reads.
+
+Target-pattern heuristic:
+
+- `T08`: Define `TargetKind` enum (`dui_dui_hu`, `hun_yi_se`, `qing_yi_se`, `default`) and `AiPersonality` record (target weights, call appetite, tile-value bias). Hardcode `NEUTRAL` personality for vanilla AIs.
+- `T09`: Define tile-value tables in `ai_strategy.tl` (tiebreakers when ting and ukeire are equal):
+  - `sequence_value`: terminal=1, edge(2,8)=2, near(3,7)=3, mid(4,5,6)=4, honors=0.
+  - `triplet_value`: non-yakuhai-honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4.
+  - The active table is selected by target (sequence-leaning targets use `sequence_value`; triplet-leaning targets use `triplet_value`).
+- `T10`: Implement target evaluator: composition features (honor count, max same-suit count, pair count) → per-target score.
+- `T11`: Implement ukeire computation alongside ting distance.
+- `T12`: Implement `estimate_fan_for_target(deal, player_index, target): integer` — pre-ting fan ceiling for a constructed-hypothetical completion of `target`. Builds a synthetic `ScoreResult` capturing the structural facts the target implies (e.g., dui_dui_hu → all triplets; hun_yi_se → one suit + honors; qing_yi_se → one suit no honors; default → standard four-sets-pair) plus obvious modifiers (men_qian if no open sets, dragon_pung per dragon-pair-or-better). Routes the synthetic result through `effect_runner.apply_score_modifiers` so future AI-owned boons contribute. Returns the resulting fan total. This is the boon-aware filter — discards/calls/kong that would lock the AI to a sub-3-fan target are rejected.
+- `T13`: `evaluate_hu` (existing) continues to handle real Hu legality at ting; it is unchanged. The strategy module distinguishes pre-ting (use `estimate_fan_for_target`) from at-ting (use `evaluate_hu`).
+- `T14`: Implement target-aware `pick_best_discard`: rank candidate discards by `(filtered ting toward best target, ukeire, target alignment, tile-value)`. Filtered ting treats targets whose `estimate_fan_for_target` < 3 as infinity.
+- `T15`: Implement target-aware reaction logic: calls allowed only if they don't regress projected fan and the resulting target's `estimate_fan_for_target` ≥ 3. Default target stays concealed unless a call clears 3 fan.
+- `T16`: Implement target-aware concealed/added Kong evaluation. Use target-filtered ting (same filter as discard), not raw ting. Reject Kong declarations that lock the AI to a sub-3-fan path.
+- `T17`: Inspector adds a per-AI-seat line: `target=hun_yi_se ting=1 ukeire=8 est_fan=5`. Render conditionally — `pass_reaction`, `zi_mo`, and `hu_on_discard` reasoning have no target line.
+- `T18`: Tests cover:
+  - Target selection on canonical hand shapes (honor-heavy → hun_yi_se; pair-heavy → dui_dui_hu; single-suit-heavy → qing_yi_se; mixed → default).
+  - Ukeire arithmetic on representative hands.
+  - `estimate_fan_for_target` returns the expected ceiling for each target shape.
+  - Discard heuristic rejects a tile whose removal would lock the AI to a sub-3-fan target.
+  - Concealed Kong rejected when it would lock to a sub-3-fan path.
+- `T19`: Forward-compat boon test — construct an AI seat with a synthetic `+2 fan` score modifier owned by that seat; verify `estimate_fan_for_target` reflects the contribution. Locks in that the runner is wired even though M1 vanilla AIs have no real boons.
+- `T20`: Manual playtest acceptance:
+  - Run 5 seeds: 42, 1, 100, 12345, plus one chosen at the time of testing.
+  - For each: run to completion in F1 scene. Record outcome (Hu by which seat, or wall exhaustion).
+  - If wall exhaustion: confirm via inspector that all four seats are genuinely 3-fan-unreachable from their final hands.
+  - Success: ≥3 of 5 terminate via Hu, OR exhaustion is justified by inspector for all seats. Capture the seed/outcome list in the slice completion summary.
+
+Acceptance criteria:
+
+- Each AI exposes a `target` value in `AiReasoning` (except for non-target reasoning tags like `pass_reaction` / `zi_mo` / `hu_on_discard`).
+- AI does not commit to a target whose `estimate_fan_for_target` is below 3 — the heuristic prefers a worse-ting path that can clear the threshold over a better-ting path that cannot.
+- Wall exhaustion on the playtest seeds is either rare, or justified by inspector when it happens.
+- Per-player Known Wall: each `PlayerState` has its own `known_wall_tile_ids`. M1 vanilla AIs see empty lists since no AI owns an info effect yet. The forward-compat boon test (`T19`) exercises the runner-pathed projected-fan path.
+- All existing tests pass; new tests cover target selection, ukeire, `estimate_fan_for_target`, and the boon-aware path.
+- AI turns feel snappy in the F1 scene (no visible stall). No automated perf assertion in M1.
+
+Verification:
+
+```sh
+make test
+make run
+```
+
+Out of scope:
+
+- Defensive AI.
+- Opponent packages (handled in a later slice; `AiPersonality` is the extension point).
+- AI-owned active boon decisions (`decide_active_boon`).
+- Limit hand and Seven Pairs targets.
+- Soft target stickiness across turns. Deferred — relying on natural feature stability (honor count, max-suit count, pair count change by ≤2 per draw). If targets visibly flap during playtest, add explicit per-AI scene-owned state in a follow-up.
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S07: Playable Round 1 UI
 
 Status: `pending`
 
@@ -1505,7 +1597,7 @@ Why this comes now: the rules stack should already work; this slice focuses on e
 
 Dependencies:
 
-- `S05`
+- `S06`
 
 Owned areas:
 
@@ -1556,7 +1648,7 @@ Completion summary:
 
 - Fill this in when the slice is merged.
 
-### S07: Milestone 1 Integration And Playtest Pass
+### S08: Milestone 1 Integration And Playtest Pass
 
 Status: `pending`
 
@@ -1566,7 +1658,7 @@ Why this comes now: the feature set needs a focused pass for regressions, confus
 
 Dependencies:
 
-- `S06`
+- `S07`
 
 Owned areas:
 
