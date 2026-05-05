@@ -25,7 +25,9 @@ local fx_runner  = require("effects.effect_runner")
 local wall_mod   = require("game.wall")
 local content    = require("content.boons")
 local boons_init = require("effects.boons.init")
-local tile_render = require("ui.tile_render")
+local calls_mod  = require("game.calls")
+local tile_render   = require("ui.tile_render")
+local action_prompt = require("ui.action_prompt")
 
 local M = {}
 
@@ -71,6 +73,10 @@ local record SceneState
    -- Most recent AI reasoning per seat (1..4). Populated by advance_one_action
    -- so the inspector can render the seat's top-K candidate alternatives.
    last_reason_by_seat: {integer: AiReasoning}
+   -- Tile id of the cursor in the player's hand row (run mode). Empty
+   -- string when there is no current selection; ensure_cursor_valid()
+   -- defaults it to the last drawn tile.
+   cursor_tile_id: TileId
 end
 
 local state: SceneState = nil
@@ -146,6 +152,7 @@ local function reset(seed: integer)
       ticks            = 0,
       selected_opening_tile_ids = {},
       last_reason_by_seat = {},
+      cursor_tile_id   = "" as TileId,
    }
    push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. " mode=" .. mode .. ")")
    check_conservation()
@@ -296,6 +303,245 @@ local function describe_reasoning(r: AiReasoning, seat: integer): string
    return body
 end
 
+-- ── Seat-1 (player) input helpers ────────────────────────────────────────
+
+local function seat1_can_react(d: DealState): boolean
+   if (d.phase as string) ~= "reaction_window" then return false end
+   if is_excluded(d, 1) then return false end
+   if has_responded(d, 1) then return false end
+   return true
+end
+
+-- True when run mode and seat 1 must make a decision the AI shouldn't
+-- make for them. The auto-advance path stops here.
+local function has_seat1_pending_input(d: DealState): boolean
+   if state.mode ~= "run" then return false end
+   local phase = d.phase as string
+   if phase == "awaiting_action" and d.current_player == 1 then return true end
+   if seat1_can_react(d) then return true end
+   return false
+end
+
+local function default_cursor_tile_id(d: DealState): TileId
+   if d.has_last_drawn then return d.last_drawn_tile_id end
+   local hand = d.players[1].hand.concealed_tiles
+   if #hand > 0 then return hand[1].tile_id end
+   return "" as TileId
+end
+
+local function ensure_cursor_valid()
+   local hand = state.deal.players[1].hand.concealed_tiles
+   if (state.cursor_tile_id as string) ~= "" then
+      for _, t in ipairs(hand) do
+         if t.tile_id == state.cursor_tile_id then return end
+      end
+   end
+   state.cursor_tile_id = default_cursor_tile_id(state.deal)
+end
+
+local function cursor_slot(): integer
+   local hand = state.deal.players[1].hand.concealed_tiles
+   local idxs = sorted_indices(hand)
+   for i, src in ipairs(idxs) do
+      if hand[src].tile_id == state.cursor_tile_id then return i end
+   end
+   return 0
+end
+
+local function move_cursor(delta: integer)
+   local hand = state.deal.players[1].hand.concealed_tiles
+   if #hand == 0 then return end
+   local slot = cursor_slot()
+   if slot == 0 then slot = 1 end
+   slot = slot + delta
+   if slot < 1 then slot = #hand end
+   if slot > #hand then slot = 1 end
+   local idxs = sorted_indices(hand)
+   state.cursor_tile_id = hand[idxs[slot]].tile_id
+end
+
+local function jump_cursor(slot: integer)
+   local hand = state.deal.players[1].hand.concealed_tiles
+   if slot < 1 or slot > #hand then return end
+   local idxs = sorted_indices(hand)
+   state.cursor_tile_id = hand[idxs[slot]].tile_id
+end
+
+-- Reaction window options for seat 1: Hu/Peng/OpenKong/Chi/Pass.
+local function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
+   local opts: {ActionPromptOption} = {}
+   local p = d.players[1]
+   local hand = p.hand.concealed_tiles
+
+   -- Hu on a discard
+   if d.has_pending_discard then
+      local pd_tile = d.pending_discard.tile
+      local shapes = validator.find_win_shapes(hand, pd_tile, p.hand.sets)
+      if #shapes > 0 then
+         opts[#opts + 1] = {
+            key        = "h",
+            label      = "Hu (claim " .. tile_label(pd_tile) .. ")",
+            action     = engine.declare_hu(1, pd_tile.tile_id, false),
+            has_action = true,
+         }
+      end
+   end
+   -- Hu on Qiang Gang (rob a kong upgrade)
+   if d.has_pending_kong then
+      local pk_tile = d.pending_added_kong.tile
+      local shapes = validator.find_win_shapes(hand, pk_tile, p.hand.sets)
+      if #shapes > 0 then
+         opts[#opts + 1] = {
+            key        = "h",
+            label      = "Hu / Qiang Gang " .. tile_label(pk_tile),
+            action     = engine.declare_hu(1, pk_tile.tile_id, false),
+            has_action = true,
+         }
+      end
+   end
+   -- Peng / Open Kong / Chi only on a real discard
+   if d.has_pending_discard then
+      local pd = d.pending_discard
+      if calls_mod.can_peng(pd.tile, hand, pd.discarder, 1) then
+         opts[#opts + 1] = {
+            key        = "p",
+            label      = "Peng " .. tile_label(pd.tile),
+            action     = engine.declare_peng(1, pd.tile.tile_id),
+            has_action = true,
+         }
+      end
+      if calls_mod.can_open_kong(pd.tile, hand, pd.discarder, 1) then
+         opts[#opts + 1] = {
+            key        = "k",
+            label      = "Open Kong " .. tile_label(pd.tile),
+            action     = engine.declare_open_kong(1, pd.tile.tile_id),
+            has_action = true,
+         }
+      end
+      if calls_mod.is_next_player(pd.discarder, 1, 4) then
+         local combos = calls_mod.chi_combinations(pd.tile, hand)
+         if #combos > 0 then
+            opts[#opts + 1] = {
+               key        = "c",
+               label      = "Chi " .. tile_label(pd.tile),
+               action     = engine.declare_chi(1, pd.tile.tile_id, combos[1]),
+               has_action = true,
+            }
+         end
+      end
+   end
+   -- Pass is always offered while seat 1 is eligible
+   opts[#opts + 1] = {
+      key        = "x",
+      label      = "Pass",
+      action     = engine.pass_reaction(1),
+      has_action = true,
+   }
+   return opts
+end
+
+-- Self-turn options for seat 1 in awaiting_action: Zi Mo / Concealed
+-- Kong / Added Kong / Discard.
+local function compute_seat1_self_options(d: DealState): {ActionPromptOption}
+   local opts: {ActionPromptOption} = {}
+   local p = d.players[1]
+   local hand = p.hand.concealed_tiles
+
+   -- Zi Mo Hu using the last drawn tile
+   if d.has_last_drawn then
+      local last_id = d.last_drawn_tile_id
+      local last_tile: Tile = nil
+      local rest: {Tile} = {}
+      for _, t in ipairs(hand) do
+         if last_tile == nil and t.tile_id == last_id then
+            last_tile = t
+         else
+            rest[#rest + 1] = t
+         end
+      end
+      if last_tile ~= nil then
+         local shapes = validator.find_win_shapes(rest, last_tile, p.hand.sets)
+         if #shapes > 0 then
+            opts[#opts + 1] = {
+               key        = "h",
+               label      = "Hu / Zi Mo " .. tile_label(last_tile),
+               action     = engine.declare_hu(1, last_id, true),
+               has_action = true,
+            }
+         end
+      end
+   end
+
+   -- Concealed Kong: any kind with 4 copies in hand (sorted for determinism).
+   local kind_count: {string:integer} = {}
+   for _, t in ipairs(hand) do
+      local k = t.kind_id as string
+      kind_count[k] = (kind_count[k] or 0) + 1
+   end
+   local quad_kinds: {string} = {}
+   for k, n in pairs(kind_count) do
+      if n >= 4 then quad_kinds[#quad_kinds + 1] = k end
+   end
+   table.sort(quad_kinds)
+   if #quad_kinds > 0 then
+      opts[#opts + 1] = {
+         key        = "k",
+         label      = "Concealed Kong (" .. quad_kinds[1] .. ")",
+         action     = engine.declare_concealed_kong(1, quad_kinds[1] as TileKindId),
+         has_action = true,
+      }
+   end
+
+   -- Added Kong: a tile in hand whose kind matches an open peng.
+   local peng_kinds: {string:boolean} = {}
+   for _, s in ipairs(p.hand.sets) do
+      if (s.kind as string) == "peng" and (s.visibility as string) == "open" and #s.tiles > 0 then
+         peng_kinds[s.tiles[1].kind_id as string] = true
+      end
+   end
+   for _, src in ipairs(sorted_indices(hand)) do
+      local t = hand[src]
+      if peng_kinds[t.kind_id as string] then
+         opts[#opts + 1] = {
+            key        = "u",
+            label      = "Added Kong " .. tile_label(t),
+            action     = engine.declare_added_kong(1, t.tile_id),
+            has_action = true,
+         }
+         break
+      end
+   end
+
+   -- Discard the cursor tile. Action is constructed on dispatch using the
+   -- current cursor position; offered last so the keybinds above stay
+   -- discoverable without scanning past Discard.
+   opts[#opts + 1] = {
+      key        = "d",
+      label      = "Discard selected tile",
+      action     = nil,
+      has_action = false,
+   }
+   return opts
+end
+
+local function apply_player_action(action: DealAction, label: string): boolean
+   local d = state.deal
+   local phase = d.phase as string
+   local tr = engine.apply_action(d, action)
+   if not tr.ok then
+      push_log("err", "player " .. label .. " failed at " .. phase .. ": " .. tr.error)
+      return false
+   end
+   state.deal = tr.deal
+   push_log("sys", "player p1 " .. label)
+   for _, e in ipairs(tr.events) do
+      push_log("ev", e.message)
+   end
+   state.ticks = state.ticks + 1
+   check_conservation()
+   return true
+end
+
 -- Pump one AI action. Returns true if state advanced.
 local function advance_one_action(): boolean
    local d = state.deal
@@ -350,6 +596,12 @@ function M.update(dt: number)
    if state.deal == nil then return end
    if (state.deal.phase as string) == "deal_over" then return end
    if state.step_mode and state.wait_for_step then return end
+   -- In run mode, hand control to the player when seat 1 owes the next
+   -- decision. Drawing (awaiting_draw) is automatic and stays AI-driven.
+   if has_seat1_pending_input(state.deal) then
+      ensure_cursor_valid()
+      return
+   end
 
    state.ai_pace_left = state.ai_pace_left - dt
    if state.ai_pace_left > 0 then return end
@@ -407,6 +659,47 @@ function M.keypressed(key: string)
       end
       if key == "c" then
          confirm_opening()
+         return
+      end
+   end
+
+   if not has_seat1_pending_input(state.deal) then return end
+   ensure_cursor_valid()
+   local d = state.deal
+   local phase = d.phase as string
+
+   -- Cursor navigation (own-turn discard only)
+   if phase == "awaiting_action" and d.current_player == 1 then
+      if key == "left" then move_cursor(-1); return end
+      if key == "right" then move_cursor(1); return end
+      local n = tonumber(key)
+      if n ~= nil and n >= 1 and n <= 9 then jump_cursor(n as integer); return end
+      if key == "0" then jump_cursor(10); return end
+      if key == "q" then jump_cursor(11); return end
+      if key == "w" then jump_cursor(12); return end
+      if key == "e" then jump_cursor(13); return end
+      if key == "r" then jump_cursor(14); return end
+   end
+
+   -- Action dispatch: match key against the option list for the current phase.
+   local opts: {ActionPromptOption}
+   if phase == "reaction_window" then
+      opts = compute_seat1_reaction_options(d)
+   else
+      opts = compute_seat1_self_options(d)
+   end
+   for _, opt in ipairs(opts) do
+      if key == opt.key then
+         if opt.has_action then
+            apply_player_action(opt.action, opt.label)
+         elseif key == "d" and phase == "awaiting_action" and d.current_player == 1 then
+            -- Discard the cursor-selected tile.
+            if (state.cursor_tile_id as string) == "" then
+               push_log("sys", "no tile selected to discard")
+               return
+            end
+            apply_player_action(engine.discard(1, state.cursor_tile_id), "discard " .. (state.cursor_tile_id as string))
+         end
          return
       end
    end
@@ -588,8 +881,17 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
       for _, id in ipairs(state.selected_opening_tile_ids) do
          if id == t.tile_id then selected = true; break end
       end
+      local is_cursor = (state.cursor_tile_id as string) ~= ""
+         and t.tile_id == state.cursor_tile_id
+         and state.mode == "run"
+         and state.deal.current_player == 1
+         and (state.deal.phase as string) == "awaiting_action"
       if selected then
          br, bg, bb = 1.00, 0.90, 0.30
+      end
+      if is_cursor then
+         fr, fg, fb = 1.00, 0.97, 0.78
+         br, bg, bb = 1.00, 0.55, 0.20
       end
       tile_render.draw_tile_box(t, tx, row_y, tile_w, tile_h, fr, fg, fb, br, bg, bb)
    end
@@ -799,6 +1101,12 @@ local function draw_hints(x: number, y: number)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
    if (state.deal.phase as string) == "opening_actions" then
       draw_text("1-0 select | U Fresh Start | X trim | C confirm | F1 inspector | R restart | ESC quit", x, y)
+   elseif state.mode == "run" and has_seat1_pending_input(state.deal) then
+      if (state.deal.phase as string) == "awaiting_action" and state.deal.current_player == 1 then
+         draw_text("← → / 1-9 0 q-r select | D discard | H Hu | K Concealed Kong | U Added Kong | F1 inspector | R restart | ESC quit", x, y)
+      else
+         draw_text("H Hu | P Peng | K Open Kong | C Chi | X Pass | F1 inspector | R restart | ESC quit", x, y)
+      end
    else
       draw_text("F1 inspector | T toggle step | S step | R restart | ESC quit", x, y)
    end
@@ -849,6 +1157,27 @@ function M.draw()
    -- Player hand row spans the full table width below the grid.
    local hand_y = content_y + grid_h + margin
    draw_player_hand_row(tx, hand_y, table_w, hand_row_h)
+
+   -- Action prompt panel overlay — sits above the hand row, anchored
+   -- to the right, when seat 1 owes a decision in run mode.
+   if has_seat1_pending_input(state.deal) then
+      local d = state.deal
+      local phase = d.phase as string
+      local opts: {ActionPromptOption}
+      local title: string
+      if phase == "reaction_window" then
+         opts = compute_seat1_reaction_options(d)
+         title = "Reaction"
+      else
+         opts = compute_seat1_self_options(d)
+         title = "Your turn"
+      end
+      local panel_w = 260
+      local panel_h = 28 + #opts * 18 + 8
+      local panel_x = tx + table_w - panel_w - 8
+      local panel_y = hand_y - panel_h - 6
+      action_prompt.draw(opts, title, panel_x, panel_y, panel_w, panel_h)
+   end
 
    -- Right panel: log on top, inspector below if open, otherwise full log.
    local right_x = sw - right_w - margin
