@@ -1620,7 +1620,7 @@ Post-merge polish (committed on the same branch):
 
 ### S07: AI Candidate Pipeline
 
-Status: `pending`
+Status: `complete` (5 commits on `agent/s07-ai-candidate-pipeline`)
 
 Goal: rebuild the AI's heuristic kernel as a candidate-record pipeline (the consensus shape across mature mahjong AI projects — see `docs/AI-RESEARCH-NOTES.md`). Replace the current per-target magic-number heuristic (`target_fitness`, `discard_priority`, `SEQUENCE_VALUE` / `TRIPLET_VALUE` tables, the explicit `choose_target` lexicographic chain) with a single fan-grounded scoring mechanism that produces structured `CandidateAction` records for every legal action. Behavior changes are measured against the S06 baseline (Hu 6/10) using a checked-in playtest harness.
 
@@ -1716,7 +1716,28 @@ Out of scope (deferred to later slices):
 
 Completion summary:
 
-- Fill this in when the slice is merged.
+The slice landed in 5 commits on `agent/s07-ai-candidate-pipeline`:
+
+- **Commit 1 (T01–T03):** Headless playtest harness in `scripts/playtest.lua`, `make playtest` target, S06 baseline recorded in `docs/playtest-logs/s07-baseline.md`. Behavior-neutral. Discovered the merged S06 tip's actual Hu rate is **7/10** (not the 6/10 the S06 completion summary claimed) — the user's PR-review fixes moved seed 12345 from wall to a Hu.
+- **Commit 2 (T04–T09):** `CandidateAction` record. Discard ranking refactored as `evaluate_discard_candidates` → `rank_candidates` → top-K. `AiReasoning` carries `candidates` field. Inspector renders top-3 candidates per AI seat. Behavior-neutral; harness still 7/10.
+- **Commit 3 (T10–T15):** Replace placeholder utility with `Σ_t [P_reach(t | hand_after) × fan(t)]`. Add `visible_depletion(target)` and `target_misfit(target)`. Delete `target_fitness`, `discard_priority`, `SEQUENCE_VALUE`, `TRIPLET_VALUE`, `tile_value`. Determinism fix: max_suit / pair_kind iterate fixed orders instead of `pairs()`. Hu rate stays 7/10 but pattern distribution explodes from `Dui Dui Hu = 7` to `Dui Dui Hu = 4, Hun Yi Se = 3, Ping Hu = 1, Qing Yi Se = 1`. Captured in `docs/playtest-logs/s07-commit-3.md`.
+- **Commit 4 (T16–T18):** Replace `has_three_fan_target_hypothetical` in call gates with `max_feasible_est_fan_hypothetical(post_call) ≥ 3`. Tighten target_feasible: qing_yi_se / hun_yi_se now require committed suit to match dominant suit. Hu rate **+1 to 8/10** with diverse pattern mix preserved. Captured in `docs/playtest-logs/s07-commit-4.md`.
+- **Commit 5 (T19–T22):** `kong_post_supplement_avg_fan` averages kong gates' post-call fan ceiling over the supplement-draw distribution. `AiPersonality` extended with `call_appetite`, `kong_appetite`, `speed_bias`, `value_bias`, `target_stickiness`, `safety_bias`. `rank_candidates` applies `call_appetite` / `kong_appetite` to candidate utility. Hu rate stays 8/10 (NEUTRAL_PERSONALITY = identity). Captured in `docs/playtest-logs/s07-commit-5.md`.
+
+Final tally:
+
+- **Hu rate: 8/10** (S06 baseline was 7/10; +1 net).
+- **Pattern distribution: Dui Dui Hu = 5, Hun Yi Se = 4** (S06 was Dui Dui Hu = 7 only — 7-of-7 collapse onto a single pattern).
+- **204/204 tests pass.** New tests added for visible_depletion, expected_fan_dist, max_feasible_est_fan, kong_post_supplement_avg_fan, AiPersonality.
+- **Deterministic across runs** (max_suit / pair_kind ordering fix).
+- **Magic-number tables removed**: `target_fitness`, `discard_priority`, `SEQUENCE_VALUE`, `TRIPLET_VALUE`, `tile_value`.
+- **All engine-facing helpers reused unchanged**: `evaluate_hu`, `compute_live_counts`, realized-modifier estimation, `effect_runner.apply_score_modifiers`, the `ting_distance` family, `post_call_ting`.
+
+The candidate-pipeline shape is now in place. Future slices can layer:
+- Defense logic (populating `danger` from opponent threat inference).
+- Bounded MCTS over top-K candidates.
+- Opponent packages with non-neutral `AiPersonality`.
+- A more sophisticated kong supplement metric (using ting-aware probability instead of feasibility-only fan ceiling).
 
 ### S08: Playable Round 1 UI
 
