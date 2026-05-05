@@ -6,8 +6,10 @@
 --
 -- Both return (DealAction, AiReasoning). The scene drives turn pumping by
 -- calling these functions and dispatching the returned action through the
--- engine. The AI never mutates state directly and never reads
--- known_wall_tile_ids (player-only information).
+-- engine. The AI never mutates state directly. An AI seat may read its own
+-- `players[seat].known_wall_tile_ids` (populated only when that seat owns an
+-- info effect like Third Eye / Open Eyes); it must not read another seat's
+-- list. M1 vanilla AIs own no info effects, so this read returns empty.
 
 require("core.types")
 require("game.deal_types")
@@ -18,6 +20,7 @@ local calls_mod  = require("game.calls")
 local td         = require("game.ting_distance")
 local fx_runner  = require("effects.effect_runner")
 local wall_mod   = require("game.wall")
+local strategy   = require("game.ai_strategy")
 
 global record AiReasoning
    tag:         string    -- "draw" | "zi_mo" | "discard" | "concealed_kong"
@@ -26,6 +29,11 @@ global record AiReasoning
    message:     string
    ting_before: integer   -- ting distance before this decision; -100 if N/A
    ting_after:  integer   -- ting distance after this decision; -100 if N/A
+   target:      string    -- chosen target pattern ("default" | "dui_dui_hu" |
+                          -- "hun_yi_se" | "qing_yi_se"); "" when reasoning
+                          -- has no target (pass_reaction, zi_mo, hu_on_discard).
+   ukeire:      integer   -- live ukeire after this decision; -1 if N/A
+   est_fan:     integer   -- target's estimated fan ceiling; -1 if N/A
 end
 
 local M = {}
@@ -161,33 +169,31 @@ local function tiles_remove_id_pair(tiles: {Tile}, id_a: TileId, id_b: TileId): 
    return out
 end
 
--- ── Discard heuristic ─────────────────────────────────────────────────────
--- For each candidate concealed tile, simulate removal and compute the
--- resulting LIVE ting distance over all shapes. Live ting prunes paths
--- whose required tiles are no longer drawable (already in some discard pile,
--- open set, or the AI's own hand) — this avoids the AI committing to a
--- "ting" hand that will never complete because all winning tiles are dead.
+-- ── AiReasoning constructor ───────────────────────────────────────────────
 
-local function pick_best_discard(deal: DealState, player_index: integer): TileId, integer, integer
-   local p = deal.players[player_index]
-   local concealed = p.hand.concealed_tiles
-   local live = M.compute_live_counts(deal, player_index)
-   local before = td.ting_distance_live(concealed, p.hand.sets, live)
-
-   local best_id: TileId = concealed[1].tile_id
-   local best_after = 1000
-   for _, t in ipairs(concealed) do
-      local rest = tiles_without_id(concealed, t.tile_id)
-      -- After this hypothetical discard, the tile sits in the discard pile —
-      -- still not drawable, so the live count is unchanged from `live`.
-      local after = td.ting_distance_live(rest, p.hand.sets, live)
-      if after < best_after or (after == best_after and (t.tile_id as string) < (best_id as string)) then
-         best_id = t.tile_id
-         best_after = after
-      end
-   end
-   return best_id, before, best_after
+local function mk_reasoning(
+   tag:        string,
+   message:    string,
+   target:     string,
+   ting_before: integer,
+   ting_after:  integer,
+   ukeire:      integer,
+   est_fan:     integer
+): AiReasoning
+   return {
+      tag         = tag,
+      message     = message,
+      target      = target,
+      ting_before = ting_before,
+      ting_after  = ting_after,
+      ukeire      = ukeire,
+      est_fan     = est_fan,
+   }
 end
+
+-- ── Discard heuristic ─────────────────────────────────────────────────────
+-- Delegates to ai_strategy: picks a target via `choose_target`, then ranks
+-- candidate discards on (live ting after, ukeire after, tile-value, tile_id).
 
 -- ── Concealed/added Kong evaluation ───────────────────────────────────────
 
@@ -233,12 +239,10 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       local p = deal.players[player_index]
       local live = M.compute_live_counts(deal, player_index)
       local before = td.ting_distance_live(p.hand.concealed_tiles, p.hand.sets, live)
-      return engine.draw(player_index), {
-         tag         = "draw",
-         message     = "draw (ting=" .. tostring(before) .. ")",
-         ting_before = before,
-         ting_after  = NA,
-      }
+      return engine.draw(player_index), mk_reasoning(
+         "draw", "draw (ting=" .. tostring(before) .. ")",
+         "", before, NA, -1, -1
+      )
    end
 
    if phase == "awaiting_action" then
@@ -256,72 +260,82 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
             local rest = tiles_without_id(concealed, drawn_id)
             local ok, _final = evaluate_hu(deal, player_index, rest, drawn_tile, true, deal.last_draw_was_supplement, false)
             if ok then
-               return engine.declare_hu(player_index, "" as TileId, true), {
-                  tag         = "zi_mo",
-                  message     = "zi mo on " .. (drawn_tile.kind_id as string),
-                  ting_before = NA,
-                  ting_after  = NA,
-               }
+               return engine.declare_hu(player_index, "" as TileId, true), mk_reasoning(
+                  "zi_mo", "zi mo on " .. (drawn_tile.kind_id as string),
+                  "", NA, NA, -1, -1
+               )
             end
          end
       end
 
-      -- Added Kong: prefer it because it preserves an existing committed shape.
+      -- Choose target up front; downstream decisions use it.
+      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
+      local live = M.compute_live_counts(deal, player_index)
+
+      -- Added Kong: strict gate — declare only if a 3-fan target remains
+      -- reachable post-kong.
       local ak_id, ak_ok = find_added_kong_target(concealed, p.hand.sets)
       if ak_ok then
-         return engine.declare_added_kong(player_index, ak_id), {
-            tag         = "added_kong",
-            message     = "added kong",
-            ting_before = NA,
-            ting_after  = NA,
-         }
+         local rest = tiles_without_id(concealed, ak_id)
+         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, p.hand.sets) then
+            return engine.declare_added_kong(player_index, ak_id), mk_reasoning(
+               "added_kong", "added kong",
+               target as string, NA, NA, -1, est_fan
+            )
+         end
       end
 
-      -- Concealed Kong: only declare if removing the four tiles does not
-      -- worsen ting distance (it shouldn't, since the four become a set).
+      -- Concealed Kong: strict gate (no ting regression + 3-fan path remains).
+      -- Concealed kong preserves men_qian (it's a "concealed" set) so it's
+      -- structurally clean; the risk is locking 4 tiles into a kong when
+      -- they could have been better used elsewhere — caught by the
+      -- ting-not-regress check. Build the kong set with the 4 actual tiles
+      -- so realized-modifier counting captures dragon/wind kongs.
       local quad_kind, has_quad = find_concealed_quad_kind(concealed)
       if has_quad then
-         local live = M.compute_live_counts(deal, player_index)
          local before = td.ting_distance_live(concealed, p.hand.sets, live)
          local rest   = tiles_without_kind(concealed, quad_kind, 4)
+         local kong_tiles: {Tile} = {}
+         for _, t in ipairs(concealed) do
+            if t.kind_id == quad_kind and #kong_tiles < 4 then
+               kong_tiles[#kong_tiles + 1] = t
+            end
+         end
          local fake_set: TileSet = {
             kind        = "kong" as TileSetKind,
             visibility  = "concealed" as SetVisibility,
-            tiles       = {},
+            tiles       = kong_tiles,
             called_from = -1,
          }
          local sets_after: {TileSet} = {}
          for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
          sets_after[#sets_after + 1] = fake_set
          local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before then
-            return engine.declare_concealed_kong(player_index, quad_kind), {
-               tag         = "concealed_kong",
-               message     = "concealed kong " .. (quad_kind as string),
-               ting_before = before,
-               ting_after  = after,
-            }
+         if after <= before
+            and strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+            return engine.declare_concealed_kong(player_index, quad_kind), mk_reasoning(
+               "concealed_kong", "concealed kong " .. (quad_kind as string),
+               target as string, before, after, -1, est_fan
+            )
          end
       end
 
-      -- Default: pick best discard.
-      local tid, before, after = pick_best_discard(deal, player_index)
-      return engine.discard(player_index, tid), {
-         tag         = "discard",
-         message     = "discard " .. (tid as string),
-         ting_before = before,
-         ting_after  = after,
-      }
+      -- Discard via target-aware strategy.
+      local tid, before, after, ukeire = strategy.pick_best_discard(
+         deal, player_index, strategy.NEUTRAL_PERSONALITY, target, live
+      )
+      return engine.discard(player_index, tid), mk_reasoning(
+         "discard", "discard " .. (tid as string),
+         target as string, before, after, ukeire, est_fan
+      )
    end
 
    -- Unknown phase: defensive — return a draw with NA reasoning. Callers should
    -- not invoke decide_main outside the AI's turn.
-   return engine.draw(player_index), {
-      tag         = "draw",
-      message     = "unexpected phase: " .. phase,
-      ting_before = NA,
-      ting_after  = NA,
-   }
+   return engine.draw(player_index), mk_reasoning(
+      "draw", "unexpected phase: " .. phase,
+      "", NA, NA, -1, -1
+   )
 end
 
 -- ── Public entry: reaction-window decision ────────────────────────────────
@@ -333,12 +347,10 @@ end
 -- and boon modifiers apply.
 function M.decide_reaction(deal: DealState, player_index: integer): DealAction, AiReasoning
    if (deal.phase as string) ~= "reaction_window" then
-      return engine.pass_reaction(player_index), {
-         tag         = "pass_reaction",
-         message     = "not in reaction window",
-         ting_before = NA,
-         ting_after  = NA,
-      }
+      return engine.pass_reaction(player_index), mk_reasoning(
+         "pass_reaction", "not in reaction window",
+         "", NA, NA, -1, -1
+      )
    end
 
    local p = deal.players[player_index]
@@ -350,12 +362,10 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          local incoming = deal.pending_discard.tile
          local ok, _final = evaluate_hu(deal, player_index, concealed, incoming, false, false, false)
          if ok then
-            return engine.declare_hu(player_index, incoming.tile_id, false), {
-               tag         = "hu_on_discard",
-               message     = "hu on " .. (incoming.kind_id as string),
-               ting_before = NA,
-               ting_after  = NA,
-            }
+            return engine.declare_hu(player_index, incoming.tile_id, false), mk_reasoning(
+               "hu_on_discard", "hu on " .. (incoming.kind_id as string),
+               "", NA, NA, -1, -1
+            )
          end
       end
    elseif deal.has_pending_kong then
@@ -363,39 +373,51 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          local kong_tile = deal.pending_added_kong.tile
          local ok, _final = evaluate_hu(deal, player_index, concealed, kong_tile, false, false, true)
          if ok then
-            return engine.declare_hu(player_index, deal.pending_added_kong.tile_id, false), {
-               tag         = "hu_on_discard",
-               message     = "qiang gang on " .. (kong_tile.kind_id as string),
-               ting_before = NA,
-               ting_after  = NA,
-            }
+            return engine.declare_hu(player_index, deal.pending_added_kong.tile_id, false), mk_reasoning(
+               "hu_on_discard", "qiang gang on " .. (kong_tile.kind_id as string),
+               "", NA, NA, -1, -1
+            )
          end
       end
       -- No legal Peng/Chi/Open Kong on a pending added kong.
-      return engine.pass_reaction(player_index), {
-         tag         = "pass_reaction",
-         message     = "pass on added kong",
-         ting_before = NA,
-         ting_after  = NA,
-      }
+      return engine.pass_reaction(player_index), mk_reasoning(
+         "pass_reaction", "pass on added kong",
+         "", NA, NA, -1, -1
+      )
    end
 
    -- Discard-driven calls: open_kong → peng → chi.
+   -- A call is accepted only if (a) it does not regress live ting and
+   -- (b) the resulting hand still has a 3-fan-reachable target.
    if deal.has_pending_discard then
       if player_index == deal.pending_discard.discarder then
-         return engine.pass_reaction(player_index), {
-            tag         = "pass_reaction",
-            message     = "discarder passes own window",
-            ting_before = NA,
-            ting_after  = NA,
-         }
+         return engine.pass_reaction(player_index), mk_reasoning(
+            "pass_reaction", "discarder passes own window",
+            "", NA, NA, -1, -1
+         )
       end
       local discarded = deal.pending_discard.tile
       local discarder = deal.pending_discard.discarder
       local live   = M.compute_live_counts(deal, player_index)
       local before = td.ting_distance_live(concealed, p.hand.sets, live)
+      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
+      -- Strict gate: accept a call only if the post-call hand still has a
+      -- 3-fan-reachable target (using fitness × est_fan via choose_target).
+      -- Combined with the realized-modifier logic in estimate_fan_for_target,
+      -- this means: pengs of dragons / seat-wind / round-wind get accepted
+      -- (the new triplet realizes a +1 fan modifier), pengs that progress a
+      -- structurally-feasible pattern target get accepted, and pengs that
+      -- just shuffle tiles without creating a 3-fan path get rejected.
+      --
+      -- Earlier tried "permissive accept" (reject only if call DESTROYS a
+      -- pre-existing 3-fan path). On 10 seeds it dropped Hu rate from 6/10
+      -- to 1/10 — junk hands accepted too many sub-strategic calls and lost
+      -- their concealed-path optionality without converging on anything.
 
       -- Open Kong: 3 in hand + 1 from discard. Set absorbs all 3 matching tiles.
+      -- After kong, concealed = 10 tiles (= K=1 ting hand size). Use plain
+      -- standard ting (no post-call adjustment needed); the algorithm models
+      -- "needs 1 added tile" naturally via the supplement draw.
       if calls_mod.can_open_kong(discarded, concealed, discarder, player_index) then
          local rest = tiles_without_kind(concealed, discarded.kind_id, 3)
          local sets_after = {} as {TileSet}
@@ -403,21 +425,21 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          sets_after[#sets_after + 1] = {
             kind        = "kong" as TileSetKind,
             visibility  = "open" as SetVisibility,
-            tiles       = {},
+            tiles       = { discarded, discarded, discarded, discarded },
             called_from = discarder,
          }
-         local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before then
-            return engine.declare_open_kong(player_index, discarded.tile_id), {
-               tag         = "open_kong",
-               message     = "open kong " .. (discarded.kind_id as string),
-               ting_before = before,
-               ting_after  = after,
-            }
+         local after = td.ting_distance_standard_live(rest, sets_after, live)
+         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+            return engine.declare_open_kong(player_index, discarded.tile_id), mk_reasoning(
+               "open_kong", "open kong " .. (discarded.kind_id as string),
+               target as string, before, after, -1, est_fan
+            )
          end
       end
 
-      -- Peng: 2 in hand + 1 from discard.
+      -- Peng: 2 in hand + 1 from discard. After peng, concealed = 11 tiles
+      -- (1 over ting hand size). The player will discard 1 next; use
+      -- `post_call_ting` which accounts for that forced discard.
       if calls_mod.can_peng(discarded, concealed, discarder, player_index) then
          local rest = tiles_without_kind(concealed, discarded.kind_id, 2)
          local sets_after = {} as {TileSet}
@@ -425,53 +447,61 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          sets_after[#sets_after + 1] = {
             kind        = "peng" as TileSetKind,
             visibility  = "open" as SetVisibility,
-            tiles       = {},
+            tiles       = { discarded, discarded, discarded },
             called_from = discarder,
          }
-         local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before then
-            return engine.declare_peng(player_index, discarded.tile_id), {
-               tag         = "peng",
-               message     = "peng " .. (discarded.kind_id as string),
-               ting_before = before,
-               ting_after  = after,
-            }
+         local after = strategy.post_call_ting(rest, sets_after, live)
+         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+            return engine.declare_peng(player_index, discarded.tile_id), mk_reasoning(
+               "peng", "peng " .. (discarded.kind_id as string),
+               target as string, before, after, -1, est_fan
+            )
          end
       end
 
-      -- Chi: only the next player can chi. Take the first combination that
-      -- does not regress ting distance, deterministic by combo order.
+      -- Chi: only the next player can chi. Stricter gate than peng — chi
+      -- commits to a sequence orientation, which can lock the hand into the
+      -- wrong direction. Require the post-chi hand to still have a 3-fan
+      -- path (not just "doesn't destroy an existing one"). This means chi
+      -- is rejected on hands that have no 3-fan path either way; the AI
+      -- doesn't flail with chis on doomed hands.
       if calls_mod.is_next_player(discarder, player_index, PLAYER_COUNT) then
          local combos = calls_mod.chi_combinations(discarded, concealed)
          for _, pair in ipairs(combos) do
             local rest = tiles_remove_id_pair(concealed, pair[1], pair[2])
+            -- Find the two concealed tiles named in this chi combo so the
+            -- simulated set carries real tiles. Without these, compute_features
+            -- can't tell what suit the chi committed to, and the qing_yi_se /
+            -- hun_yi_se feasibility gates miscount committed_suits.
+            local pair_a: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
+            local pair_b: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
+            for _, t in ipairs(concealed) do
+               if t.tile_id == pair[1] then pair_a = t end
+               if t.tile_id == pair[2] then pair_b = t end
+            end
             local sets_after = {} as {TileSet}
             for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
             sets_after[#sets_after + 1] = {
                kind        = "chi" as TileSetKind,
                visibility  = "open" as SetVisibility,
-               tiles       = {},
+               tiles       = { pair_a, pair_b, discarded },
                called_from = discarder,
             }
-            local after = td.ting_distance_live(rest, sets_after, live)
-            if after <= before then
-               return engine.declare_chi(player_index, discarded.tile_id, pair), {
-                  tag         = "chi",
-                  message     = "chi " .. (discarded.kind_id as string),
-                  ting_before = before,
-                  ting_after  = after,
-               }
+            local after = strategy.post_call_ting(rest, sets_after, live)
+            if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+               return engine.declare_chi(player_index, discarded.tile_id, pair), mk_reasoning(
+                  "chi", "chi " .. (discarded.kind_id as string),
+                  target as string, before, after, -1, est_fan
+               )
             end
          end
       end
    end
 
-   return engine.pass_reaction(player_index), {
-      tag         = "pass_reaction",
-      message     = "pass",
-      ting_before = NA,
-      ting_after  = NA,
-   }
+   return engine.pass_reaction(player_index), mk_reasoning(
+      "pass_reaction", "pass",
+      "", NA, NA, -1, -1
+   )
 end
 
 return M

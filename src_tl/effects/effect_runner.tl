@@ -242,16 +242,18 @@ local function apply_reveal_wall_front(deal: DealState, c: RevealWallFrontComman
    local available = wall_mod.remaining(deal.wall)
    local count = c.count
    if count > available then count = available end
+   local p = deal.players[c.owner_player_index]
+   if p == nil then return {} end
    -- Front tiles are at indices 1..count in wall.tiles.
    for i = 1, count do
       local tile_id = deal.wall.tiles[i].tile_id
       -- Avoid duplicate insertion if already known.
       local already = false
-      for _, existing in ipairs(deal.known_wall_tile_ids) do
+      for _, existing in ipairs(p.known_wall_tile_ids) do
          if existing == tile_id then already = true; break end
       end
       if not already then
-         deal.known_wall_tile_ids[#deal.known_wall_tile_ids + 1] = tile_id
+         p.known_wall_tile_ids[#p.known_wall_tile_ids + 1] = tile_id
       end
    end
    return {}
@@ -281,13 +283,15 @@ local function apply_replace_concealed_tiles(deal: DealState, c: ReplaceConceale
    end
 
    -- 2) Return them to the wall, optionally reshuffling. Reshuffling
-   --    invalidates Known Wall (the previously-revealed front tiles are no
-   --    longer at the front), so we clear it.
+   --    invalidates Known Wall for every player (the previously-revealed front
+   --    tiles are no longer at the front), so we clear all per-player lists.
    if c.reshuffle_wall then
       local r = wall_mod.return_and_reshuffle(deal.wall, returned, deal.rng)
       deal.wall = r.wall
       deal.rng  = r.rng
-      deal.known_wall_tile_ids = {}
+      for _, pp in ipairs(deal.players) do
+         pp.known_wall_tile_ids = {}
+      end
    else
       for _, t in ipairs(returned) do
          deal.wall.tiles[#deal.wall.tiles + 1] = t
@@ -367,8 +371,12 @@ function M.cmd_mark_used(active_effect_id: string): EffectCommand
    return c as EffectCommand
 end
 
-function M.cmd_reveal_wall_front(count: integer): EffectCommand
-   local c: RevealWallFrontCommand = { command_kind = "reveal_wall_front", count = count }
+function M.cmd_reveal_wall_front(count: integer, owner_player_index: integer): EffectCommand
+   local c: RevealWallFrontCommand = {
+      command_kind       = "reveal_wall_front",
+      count              = count,
+      owner_player_index = owner_player_index,
+   }
    return c as EffectCommand
 end
 

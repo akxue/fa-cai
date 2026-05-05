@@ -59,6 +59,7 @@ end
 global record RevealWallFrontCommand
    command_kind: string       -- "reveal_wall_front"
    count:        integer
+   owner_player_index: integer  -- seat whose known_wall_tile_ids gets the reveal
 end
 
 global record ReplaceConcealedTilesCommand

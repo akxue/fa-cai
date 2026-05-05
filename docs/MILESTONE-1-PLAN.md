@@ -242,7 +242,7 @@ Use these terms consistently in code and docs:
 - **TileSet:** Chi/Peng/Kong group
 - **Ting / Ting Pai (聽牌):** a hand that needs exactly one more tile to form a valid Hu. Use `ting` in code. Do not use `tenpai`.
 - **Ting Distance:** the number of tiles needed to reach ting. −1 = already ting. 0 = one tile away from ting. Use `ting_distance` in code. Do not use `shanten`.
-- **Known Wall:** wall tiles that are still physically in the Wall but are known to the player through an information effect
+- **Known Wall:** wall tiles that are still physically in the Wall but are known to a seat through an information effect
 - **Concealed / Men Qian:** no open TileSets; a winning discard can still be the incoming tile for a concealed win
 
 Avoid using `hand` to mean a deal.
@@ -359,7 +359,6 @@ record DealState
   round_wind: Wind
   pending_discard: PendingDiscard?
   pending_added_kong: PendingAddedKong?
-  known_wall_tile_ids: {TileId}
   effect_states: {ActiveEffectState}
   rng: RngState
   deal_result: DealResult?  -- populated when phase = "deal_over", nil otherwise
@@ -420,23 +419,23 @@ Build `deal_invariants.validate_tile_conservation(deal)` early.
 
 ## Known Wall
 
-Known Wall tiles are still physically in the Wall. They are simply known to the player because of an information effect.
+Known Wall tiles are still physically in the Wall. They are known to a specific seat because of an information effect.
 
 ```lua
-record DealState
+record PlayerState
   known_wall_tile_ids: {TileId}
 end
 ```
 
 Rules:
 
-- Third Eye sets Known Wall to the next 5 normal front-Wall tiles.
-- Open Eyes sets Known Wall to the next 3 normal front-Wall tiles.
-- Drawing a known tile removes it from `known_wall_tile_ids`.
-- Fresh Start reshuffles the Wall, so it clears `known_wall_tile_ids`.
+- Third Eye sets the owner's Known Wall to the next 5 normal front-Wall tiles.
+- Open Eyes sets the owner's Known Wall to the next 3 normal front-Wall tiles.
+- Drawing a known tile removes it from every player's `known_wall_tile_ids`.
+- Fresh Start reshuffles the Wall, so it clears every player's `known_wall_tile_ids`.
 - Known Wall tracks normal front-Wall tiles only in Milestone 1.
 - Known information persists in the UI; the player should not need to memorize peeked tiles.
-- Boundary rule: if the Wall has fewer tiles remaining than an effect's requested reveal count, populate `known_wall_tile_ids` with all remaining front-Wall tiles. Never error on a short wall.
+- Boundary rule: if the Wall has fewer tiles remaining than an effect's requested reveal count, populate the owner's `known_wall_tile_ids` with all remaining front-Wall tiles. Never error on a short wall.
 
 ---
 
@@ -796,7 +795,8 @@ end
 
 record RevealWallFrontCommand
   command_kind: string          -- "reveal_wall_front"
-  count: integer                -- tiles to add to known_wall_tile_ids
+  owner_player_index: integer   -- seat whose known_wall_tile_ids receives the reveal
+  count: integer
 end
 
 record ReplaceConcealedTilesCommand
@@ -863,7 +863,7 @@ Initial boon behavior:
 - Open Eyes sets Known Wall to next 3 front-Wall tiles after player completes Peng.
 - Third Eye sets Known Wall to next 5 front-Wall tiles after opening deal.
 - Fresh Start may swap 0-3 tiles after initial deal, before first draw/discard.
-- Fresh Start returns selected tiles to Wall, reshuffles remaining Wall, draws the same number of replacements, clears Known Wall, marks used.
+- Fresh Start returns selected tiles to Wall, reshuffles remaining Wall, draws the same number of replacements, clears every seat's Known Wall, marks used.
 - Momentum contributes `round_index - 1` extra opening tiles through an opening modifier query.
 
 ---
@@ -919,7 +919,7 @@ For each AI discard, emit an `AddLogCommand` with:
 
 ### Hidden Information
 
-AI concealed tiles are hidden in normal Dev Mode. The debug inspector reveals them. AI must not read `known_wall_tile_ids` — that field is player-only information.
+AI concealed tiles are hidden in normal Dev Mode. The debug inspector reveals them. AI may read only its own seat's `known_wall_tile_ids`; M1 vanilla AIs do not use that field because they own no information effects yet.
 
 ---
 
@@ -1392,7 +1392,7 @@ Acceptance criteria:
 - Effects do not mutate deal/run state directly.
 - Effects cannot bypass Hu shape validation or the 3 fan minimum.
 - All seven starter boons are available as typed content and behavior modules.
-- Fresh Start clears Known Wall and preserves tile conservation.
+- Fresh Start clears every seat's Known Wall and preserves tile conservation.
 
 Verification:
 
@@ -1451,7 +1451,7 @@ Acceptance criteria:
 
 - AI uses `DealAction`s and never mutates state directly.
 - AI concealed tiles are hidden in normal Dev Mode and visible in Inspector Mode.
-- AI does not read player-only `known_wall_tile_ids`.
+- M1 vanilla AI does not use `known_wall_tile_ids`; future AI may read only its own seat's list.
 - Debug UI can play through a complete deal and inspect failures.
 
 Verification:
@@ -1495,7 +1495,224 @@ Before starting `S06`, the following must be demonstrable through the debug UI:
 
 If any of these fail, stay in `S05` until resolved. Do not start the playable table slice with a broken deal engine.
 
-### S06: Playable Round 1 UI
+### S06: Smart AI (Target-Pattern Heuristic)
+
+Status: `complete`
+
+Goal: replace the ting-only vanilla AI with a target-pattern strategy that respects the 3 fan minimum, choosing among `dui_dui_hu`, `hun_yi_se`, `qing_yi_se`, and `default`. Migrate Known Wall to per-player state so future AI-owned info effects (boons, opponent packages) need no schema change.
+
+Why this comes now: the S05 vanilla AI minimized live-ting only. Playtesting (seed=42) showed AIs reach ting on 1-fan paths and exhaust the wall because the heuristic doesn't reason about whether the chosen path can clear the 3-fan minimum. The target-aware heuristic also lays the groundwork for opponent packages in later milestones — a "package" is just a non-neutral `AiPersonality`.
+
+Dependencies:
+
+- `S05`
+
+Owned areas:
+
+- `src_tl/game/ai.tl`
+- `src_tl/game/ai_strategy.tl` (new)
+- `src_tl/game/deal_types.tl` (Known Wall migration)
+- `src_tl/game/deal_engine.tl` (Known Wall migration)
+- `src_tl/effects/effect_runner.tl` (Known Wall migration)
+- `src_tl/scenes/table_scene.tl` (inspector target line)
+- `spec_tl/ai_strategy_spec.tl` (new)
+- `spec_tl/ai_spec.tl`, `spec_tl/effects_spec.tl`, `spec_tl/deal_engine_spec.tl`
+
+Tasks (single combined PR):
+
+Known Wall per-player migration (no runtime behavior change for the player; spec fixtures update mechanically):
+
+- `T01`: Move `known_wall_tile_ids` from `DealState` onto `PlayerState`.
+- `T02`: Update `RevealWallFrontCommand` dispatch to write to the owning player's list (uses the active effect's `owner_player_index`).
+- `T03`: Update Fresh Start's reshuffle clear to target the owning player's list.
+- `T04`: Update normal draw to remove the drawn tile id from the drawer's list only.
+- `T05`: Update inspector to read `players[i].known_wall_tile_ids` (shows player-1 only in M1).
+- `T06`: Relax the AI rule to "AI may read its own seat's `known_wall_tile_ids`" (forward-compat-only — M1 vanilla AIs do not exercise this).
+- `T07`: Update specs that reference the field directly to use the per-player view.
+- `T07a`: Migration completeness check — `rg known_wall_tile_ids src_tl spec_tl` returns only per-player references; no leftover `deal.known_wall_tile_ids` reads.
+
+Target-pattern heuristic:
+
+- `T08`: Define `TargetKind` enum (`dui_dui_hu`, `hun_yi_se`, `qing_yi_se`, `default`) and `AiPersonality` record (target weights, call appetite, tile-value bias). Hardcode `NEUTRAL` personality for vanilla AIs.
+- `T09`: Define tile-value tables in `ai_strategy.tl` (tiebreakers when ting and ukeire are equal):
+  - `sequence_value`: terminal=1, edge(2,8)=2, near(3,7)=3, mid(4,5,6)=4, honors=0.
+  - `triplet_value`: non-value honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4.
+  - The active table is selected by target (sequence-leaning targets use `sequence_value`; triplet-leaning targets use `triplet_value`).
+- `T10`: Implement target evaluator: composition features (honor count, max same-suit count, pair count) → per-target score.
+- `T11`: Implement ukeire computation alongside ting distance.
+- `T12`: Implement `estimate_fan_for_target(deal, player_index, target): integer` — pre-ting fan ceiling for a constructed-hypothetical completion of `target`. Builds a synthetic `ScoreResult` capturing the structural facts the target implies (e.g., dui_dui_hu → all triplets; hun_yi_se → one suit + honors; qing_yi_se → one suit no honors; default → standard four-sets-pair) plus realized modifiers from committed dragon / seat-wind / round-wind triplets. Men Qian is not counted as a planning baseline; it remains a bonus if preserved. Routes the synthetic result through `effect_runner.apply_score_modifiers` so future AI-owned boons contribute. Returns the resulting fan total. This is the boon-aware filter — discards/calls/kong that would lock the AI to a sub-3-fan target are rejected.
+- `T13`: `evaluate_hu` (existing) continues to handle real Hu legality at ting; it is unchanged. The strategy module distinguishes pre-ting (use `estimate_fan_for_target`) from at-ting (use `evaluate_hu`).
+- `T14`: Implement target-aware `pick_best_discard`: rank candidate discards by `(filtered ting toward best target, ukeire, target alignment, tile-value)`. Filtered ting treats targets whose `estimate_fan_for_target` < 3 as infinity.
+- `T15`: Implement target-aware reaction logic: calls allowed only if they don't regress projected fan and the resulting target's `estimate_fan_for_target` ≥ 3. Default target stays concealed unless a call clears 3 fan.
+- `T16`: Implement target-aware concealed/added Kong evaluation. Use target-filtered ting (same filter as discard), not raw ting. Reject Kong declarations that lock the AI to a sub-3-fan path.
+- `T17`: Inspector adds a per-AI-seat line: `target=hun_yi_se ting=1 ukeire=8 est_fan=5`. Render conditionally — `pass_reaction`, `zi_mo`, and `hu_on_discard` reasoning have no target line.
+- `T18`: Tests cover:
+  - Target selection on canonical hand shapes (honor-heavy → hun_yi_se; pair-heavy → dui_dui_hu; single-suit-heavy → qing_yi_se; mixed → default).
+  - Ukeire arithmetic on representative hands.
+  - `estimate_fan_for_target` returns the expected ceiling for each target shape.
+  - Discard heuristic rejects a tile whose removal would lock the AI to a sub-3-fan target.
+  - Concealed Kong rejected when it would lock to a sub-3-fan path.
+- `T19`: Forward-compat boon test — construct an AI seat with a synthetic `+2 fan` score modifier owned by that seat; verify `estimate_fan_for_target` reflects the contribution. Locks in that the runner is wired even though M1 vanilla AIs have no real boons.
+- `T20`: Manual playtest acceptance:
+  - Run 5 seeds: 42, 1, 100, 12345, plus one chosen at the time of testing.
+  - For each: run to completion in F1 scene. Record outcome (Hu by which seat, or wall exhaustion).
+  - If wall exhaustion: confirm via inspector that all four seats are genuinely 3-fan-unreachable from their final hands.
+  - Success: ≥3 of 5 terminate via Hu, OR exhaustion is justified by inspector for all seats. Capture the seed/outcome list in the slice completion summary.
+
+Acceptance criteria:
+
+- Each AI exposes a `target` value in `AiReasoning` (except for non-target reasoning tags like `pass_reaction` / `zi_mo` / `hu_on_discard`).
+- AI does not commit to a target whose `estimate_fan_for_target` is below 3 — the heuristic prefers a worse-ting path that can clear the threshold over a better-ting path that cannot.
+- Wall exhaustion on the playtest seeds is either rare, or justified by inspector when it happens.
+- Per-player Known Wall: each `PlayerState` has its own `known_wall_tile_ids`. M1 vanilla AIs see empty lists since no AI owns an info effect yet. The forward-compat boon test (`T19`) exercises the runner-pathed projected-fan path.
+- All existing tests pass; new tests cover target selection, ukeire, `estimate_fan_for_target`, and the boon-aware path.
+- AI turns feel snappy in the F1 scene (no visible stall). No automated perf assertion in M1.
+
+Verification:
+
+```sh
+make test
+make run
+```
+
+Out of scope:
+
+- Defensive AI.
+- Opponent packages (handled in a later slice; `AiPersonality` is the extension point).
+- AI-owned active boon decisions (`decide_active_boon`).
+- Limit hand and Seven Pairs targets.
+- Soft target stickiness across turns. Deferred — relying on natural feature stability (honor count, max-suit count, pair count change by ≤2 per draw). If targets visibly flap during playtest, add explicit per-AI scene-owned state in a follow-up.
+
+Completion summary:
+
+- Per-player Known Wall: `known_wall_tile_ids` moved from `DealState` onto `PlayerState`. `RevealWallFrontCommand` carries `owner_player_index`; Open Eyes / Third Eye thread the owner from their hook contexts. Fresh Start's reshuffle clears every seat's list (reshuffle invalidates all visibility, not just the owner's). The AI rule relaxed to "AI may read its own seat's known wall" — forward-compat documentation; M1 vanilla AIs still don't read it.
+- Strategy module in `src_tl/game/ai_strategy.tl` with explicit `StrategyModule` type so Teal can reason about both record fields (NEUTRAL_PERSONALITY, tile-value tables) and function exports without locking the inferred type. Exports: `compute_features`, `tile_value`, `estimate_fan_for_target`, `choose_target`, `compute_ukeire`, `pick_best_discard`, `has_three_fan_target`, and a `*_hypothetical` variant for call/kong simulation.
+- `estimate_fan_for_target` builds a synthetic ScoreResult from the target's implied structural facts and routes it through `effect_runner.apply_score_modifiers`. Forward-compat boon path is exercised by a synthetic-effect test (`T19`) — when AIs gain real boons in a later slice, the wiring is already in place.
+- `evaluate_hu` (in ai.tl) is unchanged and continues to handle Hu legality at ting via the validator + scorer + runner chain. The strategy module distinguishes pre-ting (estimate_fan_for_target) from at-ting (evaluate_hu).
+- Tile-value tables: `SEQUENCE_VALUE` (terminal=1 → mid=4) for sequence-leaning targets; `TRIPLET_VALUE` (honor=1 → dragon=4, seat/round wind +1) for `dui_dui_hu`. Used as discard tiebreakers.
+- Discard heuristic ranks candidates by (live_ting_after, target-aware discard_priority, tile_value, tile_id). Ukeire is computed once on the chosen candidate (per-candidate ukeire was 30× too expensive for the inner loop and rarely changed the ranking outcome).
+- Reaction logic accepts open kong / peng / chi when the resulting hand still has a 3-fan-reachable target (`has_three_fan_target_hypothetical`). Concealed and added Kong also require the same 3-fan gate; concealed Kong additionally keeps the no-ting-regression check.
+- `has_three_fan_target` delegates to `choose_target` so the gate uses `(target_fitness × est_fan ≥ 3)` semantics, mirroring what the AI will actually pursue. An earlier "any target reaches 3 fan" version was over-optimistic and reported every hand as 3-fan-reachable since dui_dui_hu's base is 3.
+- `target_fitness` tuned so `qing_yi_se` wins when honors are absent and `hun_yi_se` wins when honors are present (formerly tied at max_suit_count when honor_count=0).
+- Inspector renders an extra reasoning segment per AI seat: `[hun_yi_se est=5f uke=8]`. Non-target reasoning tags (pass_reaction, zi_mo, hu_on_discard) leave it empty.
+- Engine fix found in passing: `apply_hu_on_discard` was clearing `has_pending_discard` without moving the discarded tile anywhere, so the tile silently leaked from the conservation invariant whenever a non-zi-mo Hu landed (latent since S03; the existing hu-on-discard spec didn't validate conservation post-resolution). Fixed by appending the tile to the discarder's discards before clearing the flag. The score is unaffected because it captures the tile snapshot at scoring time.
+- DECISIONS entries: D008 (target-pattern AI strategy with `AiPersonality` + boon-aware projected fan via the runner), D009 (per-player Known Wall).
+- `make test` passes 186 / 0 / 0 (172 baseline + 14 new strategy tests). Runtime 5.6s (was 2s pre-S06 — the increase is the strategy module's per-decision work; manual playtest perception is snappy).
+- Manual playtest acceptance (`T20`): headless driver ran seeds 42, 1, 100, 12345, 7 (the prescribed five) plus 99, 200, 555, 2025, 31415 for additional sample. Outcomes:
+  - Hu: seed=100 (p1 zi mo), 12345 (p1), 99 (p4 zi mo), 200 (p4), 555 (p3 zi mo), 31415 (p4) — 6 of 10.
+  - Wall exhaustion: seeds 42, 1, 7, 2025 — 4 of 10. All exhaustions are justified per inspector: each seat is either at ting on a sub-3-fan path (`3fan_reachable=false`) or at ting waiting on a tile that didn't appear before the wall ran out.
+  - 0 stuck/error.
+- Merged via PR #(TBD) with the combined Known Wall migration + Smart AI heuristic + engine fix in one commit history.
+
+Post-merge polish (committed on the same branch):
+
+- Fix A — `compute_features` credits each open peng/kong as a triplet and exposes `open_chi_count`, `committed_suits`, and `has_committed_honor`. Pre-fix, dui_dui_hu fitness *dropped* by 2 per peng (lost concealed pair, no triplet credit), tying default's flat 6.0 and losing iteration order.
+- Fix B — `estimate_fan_for_target` returns 0 when the target's win shape is structurally impossible from already-committed open sets (dui_dui_hu with any open chi; qing_yi_se with a committed honor or 2+ committed suits; hun_yi_se with 2+ committed suits). Pre-fix, `target_base_fan` returned 3 for dui_dui_hu regardless of open chis, letting the AI accept chis that killed its own pung-only path.
+- Chi-simulation tile fix — `ai.decide_reaction` now populates the simulated chi set's `tiles` field with `{ pair_a, pair_b, discarded }` so `compute_features` sees the real committed suit during the gate hypothetical. Was `{}`, made the qing_yi_se / hun_yi_se gates miscount `committed_suits`.
+- Target-aware discards — `pick_best_discard` adds `discard_priority` as a secondary rank key. Within equal-ting candidates the AI follows through on its target's shape (drop sequence singletons under dui_dui_hu, drop honors and off-suit under qing_yi_se, drop off-suit non-honor under hun_yi_se). Default stays target-blind. This was the structural unlock for the call-and-finish loop — pre-fix, AIs would peng for dui_dui_hu and then drop sequence material in random order, ending in TING-in-shape with dead waits.
+- Display fixes (orthogonal) — table_scene sorts displayed concealed hands in mahjong order (tiao 1-9 → wan 1-9 → bing 1-9 → E S W N → F H B) and wraps overflowing hand/sets/discards/log lines so they don't get painted over by adjacent panels.
+- Final empirical baseline at branch tip (`agent/s06-smart-ai`): Hu 6 / 10, calls per deal 5–10 (peng-heavy with occasional chi/kong), 195 / 0 / 0 tests passing. This is the baseline for the next AI slice (`S07`).
+- Per-seat audit (seed 42, four mahjong-expert agents, one per seat) surfaced the structural gaps that motivate `S07`: no Qi Dui target, no visible-depletion in target fitness, target lock-in without re-evaluation under board pressure, calls that consume sequence material in suit-flush shapes, honor-singleton tiebreak doesn't read live counts, no candidate records / inspector visibility into rejected alternatives. See `docs/playtest-logs/s06-ai-state.md` for details and `docs/AI-RESEARCH-NOTES.md` for the cross-project research that frames the rebuild.
+
+### S07: AI Candidate Pipeline
+
+Status: `pending`
+
+Goal: rebuild the AI's heuristic kernel as a candidate-record pipeline (the consensus shape across mature mahjong AI projects — see `docs/AI-RESEARCH-NOTES.md`). Replace the current per-target magic-number heuristic (`target_fitness`, `discard_priority`, `SEQUENCE_VALUE` / `TRIPLET_VALUE` tables, the explicit `choose_target` lexicographic chain) with a single fan-grounded scoring mechanism that produces structured `CandidateAction` records for every legal action. Behavior changes are measured against the S06 baseline (Hu 6/10) using a checked-in playtest harness.
+
+Why this comes now: S06 shipped a working AI that hits Hu 6/10 on the standard 10-seed sweep, but the architecture accumulated patches (Fix A, Fix B, target-aware discards, post-call-ting workaround) that each individually plug a hole the *one mechanism* would close. The per-seat audit on seed 42 (`docs/playtest-logs/s06-ai-state.md`) and the cross-project research notes (`docs/AI-RESEARCH-NOTES.md`) point at the same architectural shape: candidate records carrying structured metrics (target distribution, ting, ukeire, expected fan, visible depletion, danger), filtered by legality and 3-fan reachability, ranked by personality-weighted utility. Every research learning we surveyed plugs into this pipeline at a known box; the current code can't absorb them without more ad-hoc plumbing. The slice carries forward all engine-facing helpers and logic (`evaluate_hu`, `compute_live_counts`, realized-modifier estimation, `effect_runner.apply_score_modifiers`, the `ting_distance` family, `post_call_ting`); only the heuristic kernel is replaced.
+
+Dependencies:
+
+- `S06`
+
+Owned areas:
+
+- `src_tl/game/ai.tl` (decision module — body becomes a thin shim over the pipeline)
+- `src_tl/game/ai_strategy.tl` → likely renamed to `ai_candidates.tl` or split (candidate record + pipeline + scoring)
+- `spec_tl/ai_strategy_spec.tl`, `spec_tl/ai_spec.tl` (rewritten against the candidate API)
+- `scripts/playtest.lua` (new — the headless harness)
+- `Makefile` (new `playtest` target)
+
+Tasks (multiple PR-sized commits, each measurable on the harness):
+
+Harness first (commit 1, behavior-neutral):
+
+- `T01`: Move headless playtest driver into the repo at `scripts/playtest.lua`. Track per-seed Hu/wall/stuck outcomes plus aggregate metrics: Hu rate, wall exhaustion rate, avg steps per deal, target distribution at Hu, total call mix, invalid action count.
+- `T02`: Add `make playtest` target. Document the S06 baseline (6/10 Hu) inline so every later commit's diff against this baseline is explicit.
+- `T03`: Capture pre-rebuild metrics in the slice notes — exact per-seed outcomes plus aggregate row — so each subsequent commit can be compared.
+
+Pipeline scaffold (commit 2, behavior-neutral):
+
+- `T04`: Define `CandidateAction` record carrying `action: DealAction`, `target_distribution: {TargetKind: number}`, `ting_after`, `ukeire_after`, `expected_fan`, `visible_depletion`, `danger`, `utility`, `accepted: boolean`, `rejection_reason`.
+- `T05`: Refactor `pick_best_discard` to produce one `CandidateAction` per legal discard, then call `rank_by_utility(candidates, personality)`.
+- `T06`: Refactor each call gate (peng / chi / open kong / concealed kong / added kong) to produce `CandidateAction` records and rank uniformly with the discard candidates' format.
+- `T07`: Extend `AiReasoning` to carry the top 3 candidates (their full record) so the inspector can show "AI picked X because; rejected Y because; rejected Z because."
+- `T08`: Placeholder `expected_fan` — uses the existing `est_fan` from `estimate_fan_for_target` so ranking outcomes don't change. Harness must still report Hu 6/10. If it doesn't, the refactor introduced a regression and is fixed before T09.
+- `T09`: Inspector renders top-3 candidate row per AI seat (when in step mode or when an inspector toggle is on; full list is verbose).
+
+Fan-grounded probability + visible depletion (commit 3, biggest behavior change):
+
+- `T10`: Replace placeholder `expected_fan` with `Σ_t [P_reach(t | hand_after) × fan(t)]` across feasible targets. Initial `P_reach` form: `1 / (ting_to_target + 1) × min_live_completion_paths × (1 - visible_depletion_t)`. Crude but grounded; iterate on the formula, not by adding special cases.
+- `T11`: `visible_depletion(target)` reads opponents' open sets and discards in the suits/honors the target needs. Concrete: qing_yi_se in bing should drop probability when bing tiles are publicly consumed by opponents.
+- `T12`: Delete `target_fitness`, `discard_priority`, `SEQUENCE_VALUE`, `TRIPLET_VALUE` from `ai_strategy.tl`. Target distribution emerges from `expected_fan` contributions; the chosen target (for inspector display) is the one with maximum contribution.
+- `T13`: Honor singleton tiebreak now reads `live[kind]` automatically through the visible-depletion path (no special-case code needed). Confirm via spec.
+- `T14`: Fan-enabling tiles for sub-3-fan hands are kept automatically — the East-discard-as-dealer bug from p1's audit becomes a `P_reach(dui_dui_hu | keep East) > P_reach(dui_dui_hu | drop East)` outcome, not a special case.
+- `T15`: Re-run harness, document new Hu rate. Acceptance: Hu rate ≥ 6/10. If lower, iterate on the probability formula.
+
+Call gates evaluate post-call best candidate (commit 4):
+
+- `T16`: Replace `has_three_fan_target_hypothetical` in the call gates with: build the post-call hand, run the candidate pipeline on it, accept the call only if the best post-call candidate has `expected_fan ≥ 3`. The call's own `expected_fan` becomes that best post-call candidate's `expected_fan`.
+- `T17`: This naturally fixes the run-breaking peng pattern (p2 in seed 42) — calls that consume sequence material lower the post-call best candidate's expected fan, and the gate rejects.
+- `T18`: Re-run harness; document.
+
+Kong replacement-draw expectation + personality scaffolding (commit 5):
+
+- `T19`: Kong candidates compute `expected_fan` averaged over the supplement-draw distribution (live count weighted). Different from peng/chi (no extra draw). Localized special case in the score function.
+- `T20`: `AiPersonality` gains `speed_bias`, `value_bias`, `call_appetite`, `kong_appetite`, `target_stickiness`, `safety_bias` fields plumbed into `rank_by_utility`. M1 still ships `NEUTRAL_PERSONALITY` only.
+- `T21`: `danger` field reserved in `CandidateAction`, populated as 0. Defense lands in a later slice; the field is plumbed now so downstream code stays stable.
+- `T22`: Re-run harness; document final Hu rate and the per-commit progression.
+
+Tests:
+
+- `T23`: Strategy tests rewritten against the candidate API. Where the old tests asserted "given hand X with target T, discard tile Y," the new tests assert "given hand X, the candidate pipeline returns top-3 candidates with these expected_fan values" or "given hand X, candidate Y is ranked higher than candidate Z because." Same coverage, less locked into one mechanism.
+- `T24`: Add tests for the visible-depletion penalty (qing_yi_se in bing scores lower when opponents have committed bing).
+- `T25`: Add tests for post-call-best-candidate gating (chi that breaks own bing run is rejected even though post-call ting is fine).
+
+Acceptance criteria:
+
+- `make playtest` reports Hu rate ≥ 6/10 on the standard 10-seed sweep, ideally higher. Each seed's outcome is reproducible.
+- Inspector shows top-3 candidates per AI seat with `expected_fan`, `target_distribution`, ting, ukeire, and rejection reason for the alternatives.
+- The four magic-number tables/functions (`target_fitness`, `discard_priority`, `SEQUENCE_VALUE`, `TRIPLET_VALUE`) are removed; behavior is derived from probability × fan.
+- Visible depletion penalty visibly downgrades targets that opponents are racing (verifiable via inspector and a test).
+- Call gates reject calls whose best post-call candidate has `expected_fan < 3`, regardless of post-call ting.
+- All existing engine-facing helpers and logic (`evaluate_hu`, `compute_live_counts`, realized-modifier estimation, `ting_distance` family, `post_call_ting`, `effect_runner.apply_score_modifiers`) are reused unchanged.
+- `make test` passes; new tests cover the candidate pipeline shape, visible-depletion behavior, and post-call-best-candidate gating.
+- The S06 empirical baseline (Hu 6/10) is matched or exceeded by the slice's tip commit; intermediate commits may dip but never merge to main below baseline.
+
+Verification:
+
+```sh
+make check
+make build
+make test
+make playtest
+make run
+```
+
+Out of scope (deferred to later slices):
+
+- Threat-triggered defense and opponent target inference. `danger` field is reserved but stays at 0 until a later slice ships defense logic.
+- Bounded MCTS / lookahead search. The candidate pipeline is the prerequisite — search adds a layer that explores top-K heuristic candidates, but only after the heuristic stage produces structured records.
+- ML-based AI. The candidate-record schema *is* the eventual observation/action surface for ML, but training infrastructure and self-play pipelines are explicitly out of M1.
+- Adding new hand-pattern targets like Qi Dui. Rare hands are not the bottleneck (per the per-seat audit and the user's post-audit pushback); the structural priority-list rebuild is. Qi Dui can be added later as a target whose `P_reach` depends on hand pair_count and concealed-only feasibility.
+- Opponent packages with non-neutral `AiPersonality` weights. The personality fields are plumbed in T20 but vanilla AIs use `NEUTRAL_PERSONALITY`.
+
+Completion summary:
+
+- Fill this in when the slice is merged.
+
+### S08: Playable Round 1 UI
 
 Status: `pending`
 
@@ -1505,7 +1722,7 @@ Why this comes now: the rules stack should already work; this slice focuses on e
 
 Dependencies:
 
-- `S05`
+- `S06`
 
 Owned areas:
 
@@ -1556,7 +1773,7 @@ Completion summary:
 
 - Fill this in when the slice is merged.
 
-### S07: Milestone 1 Integration And Playtest Pass
+### S09: Milestone 1 Integration And Playtest Pass
 
 Status: `pending`
 
@@ -1566,7 +1783,7 @@ Why this comes now: the feature set needs a focused pass for regressions, confus
 
 Dependencies:
 
-- `S06`
+- `S08`
 
 Owned areas:
 

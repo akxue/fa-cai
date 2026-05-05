@@ -1,8 +1,9 @@
 -- Minimal LÖVE 11.x type declarations. Expand per slice as needed.
 
 global record Font
-   getWidth: function(Font, text: string): number
+   getWidth:  function(Font, text: string): number
    getHeight: function(Font): number
+   getWrap:   function(Font, text: string, wraplimit: number): (number, {string})
 end
 
 global record love

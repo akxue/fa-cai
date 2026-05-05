@@ -58,10 +58,11 @@ local function make_deal(
 ): DealState
    local function mk_player(tiles: {Tile}, sw: string, human: boolean): PlayerState
       return {
-         hand         = { concealed_tiles = tiles, sets = {}, discards = {} },
-         opening_trim = {},
-         seat_wind    = sw as Wind,
-         is_human     = human,
+         hand                = { concealed_tiles = tiles, sets = {}, discards = {} },
+         opening_trim        = {},
+         seat_wind           = sw as Wind,
+         is_human            = human,
+         known_wall_tile_ids = {},
       }
    end
    return {
@@ -84,7 +85,6 @@ local function make_deal(
          declarer = 0,
       },
       has_pending_kong         = false,
-      known_wall_tile_ids      = {},
       rng                      = rng_mod.from_seed(1),
       deal_result              = {
          winner_player_index = 0, won_by_zi_mo = false,
@@ -176,6 +176,24 @@ describe("deal_engine", function()
          assert.is_true(tr.ok, tr.error)
          local r = invariants.validate_tile_conservation(tr.deal)
          assert.is_true(r.ok, r.details)
+      end)
+
+      it("removes the drawn tile from every player's Known Wall view", function()
+         local d = make_deal(
+            {}, {}, {}, {},
+            { tile("bing_1_a", "bing_1"), tile("bing_2_a", "bing_2") },
+            "awaiting_draw", 2, "" as TileId, false
+         )
+         d.players[1].known_wall_tile_ids = { "bing_1_a" as TileId, "bing_2_a" as TileId }
+         d.players[2].known_wall_tile_ids = { "bing_1_a" as TileId }
+         d.players[3].known_wall_tile_ids = { "bing_2_a" as TileId }
+
+         local tr = engine.apply_action(d, engine.draw(2))
+         assert.is_true(tr.ok, tr.error)
+         assert.are.equal(1, #tr.deal.players[1].known_wall_tile_ids)
+         assert.are.equal("bing_2_a", tr.deal.players[1].known_wall_tile_ids[1] as string)
+         assert.are.equal(0, #tr.deal.players[2].known_wall_tile_ids)
+         assert.are.equal(1, #tr.deal.players[3].known_wall_tile_ids)
       end)
    end)
 
@@ -549,6 +567,8 @@ describe("deal_engine", function()
          local hand14 = parse("1111t 234t 567t 89w 1w 5w")  -- 14 tiles
          local supp = tile("bing_5_a", "bing_5")
          local d = make_deal(hand14, {}, {}, {}, { supp }, "awaiting_action", 1, "wan_5_a" as TileId, true)
+         d.players[1].known_wall_tile_ids = { "bing_5_a" as TileId }
+         d.players[2].known_wall_tile_ids = { "bing_5_a" as TileId }
 
          local tr = engine.apply_action(d, engine.declare_concealed_kong(1, "tiao_1" as TileKindId))
          assert.is_true(tr.ok, tr.error)
@@ -559,6 +579,8 @@ describe("deal_engine", function()
          assert.are.equal("kong", tr.deal.players[1].hand.sets[1].kind as string)
          assert.are.equal("concealed", tr.deal.players[1].hand.sets[1].visibility as string)
          assert.is_true(tr.deal.last_draw_was_supplement)
+         assert.are.equal(0, #tr.deal.players[1].known_wall_tile_ids)
+         assert.are.equal(0, #tr.deal.players[2].known_wall_tile_ids)
       end)
 
       it("empty supplement wall exhausts before concealed kong resolves", function()
@@ -596,15 +618,17 @@ describe("deal_engine", function()
             opening_trim = {},
             seat_wind = "east" as Wind,
             is_human = true,
+            known_wall_tile_ids = {},
          }
          local empty: PlayerState = {
             hand = { concealed_tiles = {}, sets = {}, discards = {} },
             opening_trim = {}, seat_wind = "south" as Wind, is_human = false,
+            known_wall_tile_ids = {},
          }
          local d: DealState = {
             players = { p1_state, empty,
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false },
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false, known_wall_tile_ids = {} },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false, known_wall_tile_ids = {} },
             },
             wall = { tiles = { tile("bing_9_d", "bing_9") } },  -- supplement
             phase = "awaiting_action" as DealPhase,
@@ -616,7 +640,7 @@ describe("deal_engine", function()
                tile     = { tile_id = "" as TileId, kind_id = "" as TileKindId },
                declarer = 0,
             }, has_pending_kong = false,
-            known_wall_tile_ids = {}, rng = rng_mod.from_seed(1),
+            rng = rng_mod.from_seed(1),
             deal_result = { winner_player_index = 0, won_by_zi_mo = false,
                score_result = { win_shape_kind="" as WinShapeKind, reasons={}, total_fan=0, is_limit=false, rating=""as Rating, valid_hu=false },
                has_score_result = false },
@@ -661,15 +685,17 @@ describe("deal_engine", function()
             opening_trim = {},
             seat_wind = "east" as Wind,
             is_human = true,
+            known_wall_tile_ids = {},
          }
          local empty: PlayerState = {
             hand = { concealed_tiles = {}, sets = {}, discards = {} },
             opening_trim = {}, seat_wind = "south" as Wind, is_human = false,
+            known_wall_tile_ids = {},
          }
          local d: DealState = {
             players = { p1_state, empty,
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false },
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false, known_wall_tile_ids = {} },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false, known_wall_tile_ids = {} },
             },
             wall = { tiles = {} },
             phase = "awaiting_action" as DealPhase,
@@ -681,7 +707,7 @@ describe("deal_engine", function()
                tile     = { tile_id = "" as TileId, kind_id = "" as TileKindId },
                declarer = 0,
             }, has_pending_kong = false,
-            known_wall_tile_ids = {}, rng = rng_mod.from_seed(1),
+            rng = rng_mod.from_seed(1),
             deal_result = { winner_player_index = 0, won_by_zi_mo = false,
                score_result = { win_shape_kind="" as WinShapeKind, reasons={}, total_fan=0, is_limit=false, rating=""as Rating, valid_hu=false },
                has_score_result = false },

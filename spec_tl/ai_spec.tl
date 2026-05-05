@@ -45,10 +45,11 @@ local function make_deal(
 ): DealState
    local function mk(tiles: {Tile}, sw: string, human: boolean): PlayerState
       return {
-         hand         = { concealed_tiles = tiles, sets = {}, discards = {} },
-         opening_trim = {},
-         seat_wind    = sw as Wind,
-         is_human     = human,
+         hand                = { concealed_tiles = tiles, sets = {}, discards = {} },
+         opening_trim        = {},
+         seat_wind           = sw as Wind,
+         is_human            = human,
+         known_wall_tile_ids = {},
       }
    end
    return {
@@ -71,7 +72,6 @@ local function make_deal(
          declarer = 0,
       },
       has_pending_kong         = false,
-      known_wall_tile_ids      = {},
       rng                      = rng_mod.from_seed(1),
       deal_result              = {
          winner_player_index = 0, won_by_zi_mo = false,
@@ -168,25 +168,29 @@ describe("ai", function()
          assert.are.equal(min_after, reason.ting_after)
       end)
 
-      it("is deterministic on tie: picks the tile_id-smallest candidate", function()
-         -- Two equivalent junk tiles; tie-break by tile_id ascending.
+      it("is deterministic and prefers low tile-value candidates on tie", function()
+         -- Two equivalent ting-after candidates; the heuristic tiebreaks by
+         -- tile-value (terminal=1 < mid suited=4), so wan_9 (terminal) is
+         -- preferred for discard over bing_5 (mid suited).
          local hand = parse("111t 222w 333b 444b 5b 9w")
          local d = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
          local action_a = ai.decide_main(d, 1)
          local action_b = ai.decide_main(d, 1)
          assert.are.equal((action_a as DiscardAction).tile_id, (action_b as DiscardAction).tile_id)
-         -- "bing_5_a" < "wan_9_a", so 5b wins the tie.
-         assert.are.equal("bing_5_a", (action_a as DiscardAction).tile_id as string)
+         assert.are.equal("wan_9_a", (action_a as DiscardAction).tile_id as string)
       end)
 
-      it("does not read known_wall_tile_ids", function()
+      it("M1 vanilla AI ignores its own seat's known_wall_tile_ids", function()
+         -- AI may read its own seat's known wall (forward-compat with future
+         -- info effects), but vanilla M1 AI does not consult it. Populating
+         -- the seat's known wall must not change the chosen discard.
          local hand = parse("111t 222w 333b 44b 55b 9w")
          local d_clean = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
          local d_misled = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
-         d_misled.known_wall_tile_ids = { ("tiao_1_a") as TileId, ("wan_9_a") as TileId }
+         d_misled.players[1].known_wall_tile_ids = { ("tiao_1_a") as TileId, ("wan_9_a") as TileId }
          local a1 = ai.decide_main(d_clean, 1)
          local a2 = ai.decide_main(d_misled, 1)
          assert.are.equal((a1 as DiscardAction).tile_id, (a2 as DiscardAction).tile_id)
@@ -264,19 +268,24 @@ describe("ai", function()
          assert.are.equal("open_kong", reason.tag)
       end)
 
-      it("calls peng when ting does not regress", function()
-         -- Two of a kind + matching discard. After peng, ting should not worsen.
+      it("calls peng when standard ting does not regress", function()
+         -- Two of a kind + matching discard. The AI either pengs (because
+         -- standard ting doesn't regress and a 3-fan path survives) or
+         -- passes. Both are acceptable — this test guards against the
+         -- regression "AI accepts a peng that worsens standard ting."
          local hand = parse("11t 222w 333b 44b 55b 6w")
          local d = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 2, "" as TileId, false)
          d = set_pending_discard(d, tile("tiao_1_c", "tiao_1"), 2)
-         local before = td.ting_distance(hand, {})
          local action, reason = ai.decide_reaction(d, 1)
          if action.kind == "declare_peng" then
-            assert.is_true(reason.ting_after <= before)
+            -- AI accepted: live-aware standard ting on the post-peng hand
+            -- must be ≤ live-aware standard ting on the pre-peng hand.
+            local live = ai.compute_live_counts(d, 1)
+            local before_std = td.ting_distance_standard_live(hand, {}, live)
+            assert.is_true(reason.ting_after <= before_std,
+               "ting_after=" .. tostring(reason.ting_after) .. " > before_std=" .. tostring(before_std))
          else
-            -- If the engine prefers pass for ting reasons, that's also OK; this
-            -- test guards regression on the documented "no regress" rule.
             assert.are.equal("pass_reaction", action.kind)
          end
       end)

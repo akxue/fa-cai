@@ -66,10 +66,11 @@ end
 
 local function copy_player(p: PlayerState): PlayerState
    return {
-      hand         = copy_hand(p.hand),
-      opening_trim = copy_tiles(p.opening_trim),
-      seat_wind    = p.seat_wind,
-      is_human     = p.is_human,
+      hand                = copy_hand(p.hand),
+      opening_trim        = copy_tiles(p.opening_trim),
+      seat_wind           = p.seat_wind,
+      is_human            = p.is_human,
+      known_wall_tile_ids = copy_tile_ids(p.known_wall_tile_ids),
    }
 end
 
@@ -124,7 +125,6 @@ local function copy_deal(d: DealState): DealState
       has_pending_discard      = d.has_pending_discard,
       pending_added_kong       = d.pending_added_kong,
       has_pending_kong         = d.has_pending_kong,
-      known_wall_tile_ids      = copy_tile_ids(d.known_wall_tile_ids),
       rng                      = d.rng,
       deal_result              = d.deal_result,
       has_deal_result          = d.has_deal_result,
@@ -180,6 +180,12 @@ local function remove_known(known: {TileId}, tile_id: TileId): {TileId}
       else out[#out + 1] = id end
    end
    return out
+end
+
+local function remove_known_from_all(players: {PlayerState}, tile_id: TileId)
+   for _, p in ipairs(players) do
+      p.known_wall_tile_ids = remove_known(p.known_wall_tile_ids, tile_id)
+   end
 end
 
 local function has_passed(passes: {integer}, player_index: integer): boolean
@@ -293,6 +299,7 @@ local function draw_supplement(d: DealState, player_index: integer): DealState, 
    d.players[player_index].hand.concealed_tiles[
       #d.players[player_index].hand.concealed_tiles + 1
    ] = dr.tile
+   remove_known_from_all(d.players, dr.tile.tile_id)
    d.last_draw_was_supplement = true
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true
@@ -378,10 +385,11 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
          w = dr.wall
       end
       players[i] = {
-         hand = { concealed_tiles = hand_tiles, sets = {}, discards = {} },
-         opening_trim = {},
-         seat_wind    = SEAT_WINDS[i],
-         is_human     = (i == 1),
+         hand                = { concealed_tiles = hand_tiles, sets = {}, discards = {} },
+         opening_trim        = {},
+         seat_wind           = SEAT_WINDS[i],
+         is_human            = (i == 1),
+         known_wall_tile_ids = {},
       }
    end
 
@@ -396,7 +404,6 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
       has_pending_discard      = false,
       pending_added_kong       = empty_pending_kong(),
       has_pending_kong         = false,
-      known_wall_tile_ids      = {},
       rng                      = cur_rng,
       deal_result              = empty_deal_result(),
       has_deal_result          = false,
@@ -545,7 +552,7 @@ local function handle_draw(deal: DealState, action: DrawAction): DealTransition
    d.players[action.player_index].hand.concealed_tiles[
       #d.players[action.player_index].hand.concealed_tiles + 1
    ] = dr.tile
-   d.known_wall_tile_ids      = remove_known(d.known_wall_tile_ids, dr.tile.tile_id)
+   remove_known_from_all(d.players, dr.tile.tile_id)
    d.last_draw_was_supplement = false
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true
@@ -593,6 +600,7 @@ local function apply_hu_on_discard(d: DealState, winner_index: integer): DealTra
    local validator = require("game.hand_validator")
    local p        = d.players[winner_index]
    local incoming = d.pending_discard.tile
+   local discarder = d.pending_discard.discarder
    local ctx      = build_score_ctx(d, winner_index, false, false, false)
    local shapes   = validator.find_win_shapes(p.hand.concealed_tiles, incoming, p.hand.sets)
    local output   = scorer_mod.score_hand(shapes, ctx)
@@ -603,6 +611,10 @@ local function apply_hu_on_discard(d: DealState, winner_index: integer): DealTra
    if not score_passes_threshold(final) then
       return err(d, "resolve: hu on discard no longer valid after modifiers")
    end
+   -- Move the discarded tile into the discarder's discards so it stays
+   -- accounted for after we clear pending_discard (the invariant only
+   -- counts pending_discard when has_pending_discard is true).
+   d.players[discarder].hand.discards[#d.players[discarder].hand.discards + 1] = incoming
    d.phase = "deal_over" as DealPhase
    d.deal_result = {
       winner_player_index = winner_index,

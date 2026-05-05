@@ -17,8 +17,8 @@ M.metadata = {
    priority    = 100,
 }
 
-function M.on_after_peng(_hctx: EffectAfterPengContext, _deal: DealState): {EffectCommand}
-   return { runner.cmd_reveal_wall_front(3) }
+function M.on_after_peng(hctx: EffectAfterPengContext, _deal: DealState): {EffectCommand}
+   return { runner.cmd_reveal_wall_front(3, hctx.player_index) }
 end
 
 return M
