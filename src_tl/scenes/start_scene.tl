@@ -1,18 +1,17 @@
 -- Start scene. Title screen with three options: begin a fresh run, jump
--- into the S05 debug table for development, or quit. Selection navigates
--- with up/down/k/j; confirms with return/enter/space.
---
--- "Start Run" currently routes to the debug table scene as a placeholder;
--- commit 2 inserts the boon select scene in front of it.
+-- into the S05 debug table for development, or quit. The menu items are
+-- clickable; keyboard fallback (up/down/j/k + enter/space) still works.
 
 require("app.scene_stack")
 
 local scene_stack       = require("app.scene_stack")
 local table_scene       = require("scenes.table_scene")
 local boon_select_scene = require("scenes.boon_select_scene")
+local clickable_mod     = require("ui.clickable")
 
 local record StartState
-   selected: integer
+   selected:   integer
+   clickables: {Clickable}
 end
 
 local state: StartState = nil
@@ -23,17 +22,26 @@ local MENU_LABELS: {string} = {
    "Quit",
 }
 
-local M: Scene = {} as Scene
+local M = {}
 
 function M.load()
    love.graphics.setBackgroundColor(0.10, 0.10, 0.12, 1.0)
-   state = { selected = 1 }
+   state = { selected = 1, clickables = {} }
 end
 
 function M.update(_dt: number)
 end
 
-function M.mousepressed(_x: number, _y: number, _button: integer)
+local function activate(idx: integer)
+   state.selected = idx
+   local choice = MENU_LABELS[idx]
+   if choice == "Start Run" then
+      scene_stack.push(boon_select_scene as Scene)
+   elseif choice == "Debug Table (S05)" then
+      scene_stack.replace(table_scene as Scene)
+   elseif choice == "Quit" then
+      love.event.quit(0)
+   end
 end
 
 function M.draw()
@@ -42,30 +50,39 @@ function M.draw()
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
    love.graphics.print("a solo roguelike Hong Kong mahjong", 40, 50)
 
+   state.clickables = {}
    for i, label in ipairs(MENU_LABELS) do
-      local y = 110 + (i - 1) * 26
+      local y = 110 + (i - 1) * 32
+      local row_x, row_y = 50, y - 4
+      local row_w, row_h = 320, 28
+
+      -- Hover/selected styling
       if i == state.selected then
+         love.graphics.setColor(0.20, 0.22, 0.30, 1.0)
+         love.graphics.rectangle("fill", row_x, row_y, row_w, row_h)
          love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
-         love.graphics.print("> " .. label, 60, y)
       else
-         love.graphics.setColor(0.80, 0.80, 0.85, 1.0)
-         love.graphics.print("  " .. label, 60, y)
+         love.graphics.setColor(0.16, 0.17, 0.22, 1.0)
+         love.graphics.rectangle("fill", row_x, row_y, row_w, row_h)
+         love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
       end
+      love.graphics.print(label, row_x + 12, y)
+
+      local idx = i
+      state.clickables[#state.clickables + 1] = {
+         x = row_x, y = row_y, w = row_w, h = row_h,
+         callback = function() activate(idx) end,
+      }
    end
 
    love.graphics.setColor(0.45, 0.45, 0.50, 1.0)
-   love.graphics.print("up/down or j/k select   return/space confirm   esc quit", 40, 280)
+   love.graphics.print("click to choose   /   up-down + enter also work   /   esc quits", 40, 280)
 end
 
-local function activate()
-   local choice = MENU_LABELS[state.selected]
-   if choice == "Start Run" then
-      scene_stack.push(boon_select_scene as Scene)
-   elseif choice == "Debug Table (S05)" then
-      scene_stack.replace(table_scene as Scene)
-   elseif choice == "Quit" then
-      love.event.quit(0)
-   end
+function M.mousepressed(x: number, y: number, button: integer)
+   if button ~= 1 then return end
+   local hit = clickable_mod.find(state.clickables, x, y)
+   if hit ~= nil then hit.callback() end
 end
 
 function M.keypressed(key: string)
@@ -84,7 +101,7 @@ function M.keypressed(key: string)
       return
    end
    if key == "return" or key == "kpenter" or key == "space" then
-      activate()
+      activate(state.selected)
       return
    end
 end

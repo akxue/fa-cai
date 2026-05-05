@@ -1,14 +1,14 @@
 -- Reward scene. Shown after the player wins Round 1. Renders the
 -- score breakdown (hand patterns, modifiers, and any boon-attributed
--- reasons) so the player can see how the fan total adds up. Pressing
--- Enter returns to the start scene; M1 only ships Round 1, so there is
--- no further round advancement here.
+-- reasons) so the player can see how the fan total adds up. Click the
+-- Continue button (or press enter/space/esc) to return to the start.
 
 require("core.types")
 require("game.deal_types")
 require("app.scene_stack")
 
-local scene_stack = require("app.scene_stack")
+local scene_stack   = require("app.scene_stack")
+local clickable_mod = require("ui.clickable")
 -- The "continue" transition goes through scene_stack.fire_back_to_start
 -- so this scene does not statically import start_scene (which would
 -- create a cycle with boon_select_scene → table_scene → reward_scene).
@@ -18,6 +18,7 @@ local record RewardState
    score_result: ScoreResult
    has_score:    boolean
    won_by_zi_mo: boolean
+   clickables:   {Clickable}
 end
 
 local pending: RewardState = nil
@@ -31,6 +32,7 @@ function M.start(score_result: ScoreResult, has_score: boolean, won_by_zi_mo: bo
       score_result = score_result,
       has_score    = has_score,
       won_by_zi_mo = won_by_zi_mo,
+      clickables   = {},
    }
    has_pending = true
 end
@@ -42,25 +44,36 @@ function M.load()
       pending = nil
       has_pending = false
    else
-      state = { score_result = {} as ScoreResult, has_score = false, won_by_zi_mo = false }
+      state = { score_result = {} as ScoreResult, has_score = false, won_by_zi_mo = false, clickables = {} }
    end
 end
 
 function M.update(_dt: number)
 end
 
-function M.mousepressed(_x: number, _y: number, _button: integer)
+local function draw_continue_button(y: number)
+   local x, w, h = 40, 220, 36
+   love.graphics.setColor(0.20, 0.32, 0.22, 1.0)
+   love.graphics.rectangle("fill", x, y, w, h)
+   love.graphics.setColor(0.50, 0.85, 0.55, 1.0)
+   love.graphics.rectangle("line", x, y, w, h)
+   love.graphics.setColor(0.92, 1.00, 0.92, 1.0)
+   love.graphics.print("Continue → start", x + 16, y + 10)
+   state.clickables[#state.clickables + 1] = {
+      x = x, y = y, w = w, h = h,
+      callback = function() scene_stack.fire_back_to_start() end,
+   }
 end
 
 function M.draw()
+   state.clickables = {}
    love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
    love.graphics.print("Round 1 Won!", 40, 30)
 
    if not state.has_score then
       love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
       love.graphics.print("(no score result available)", 40, 70)
-      love.graphics.setColor(0.45, 0.45, 0.50, 1.0)
-      love.graphics.print("return/space  continue", 40, 110)
+      draw_continue_button(110)
       return
    end
 
@@ -85,8 +98,13 @@ function M.draw()
       y = y + 18
    end
 
-   love.graphics.setColor(0.45, 0.45, 0.50, 1.0)
-   love.graphics.print("return/space continue   esc quit run", 40, y + 24)
+   draw_continue_button(y + 24)
+end
+
+function M.mousepressed(x: number, y: number, button: integer)
+   if button ~= 1 then return end
+   local hit = clickable_mod.find(state.clickables, x, y)
+   if hit ~= nil then hit.callback() end
 end
 
 function M.keypressed(key: string)
