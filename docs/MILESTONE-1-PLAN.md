@@ -1497,7 +1497,7 @@ If any of these fail, stay in `S05` until resolved. Do not start the playable ta
 
 ### S06: Smart AI (Target-Pattern Heuristic)
 
-Status: `pending`
+Status: `complete`
 
 Goal: replace the ting-only vanilla AI with a target-pattern strategy that respects the 3 fan minimum, choosing among `dui_dui_hu`, `hun_yi_se`, `qing_yi_se`, and `default`. Migrate Known Wall to per-player state so future AI-owned info effects (boons, opponent packages) need no schema change.
 
@@ -1585,7 +1585,24 @@ Out of scope:
 
 Completion summary:
 
-- Fill this in when the slice is merged.
+- Per-player Known Wall: `known_wall_tile_ids` moved from `DealState` onto `PlayerState`. `RevealWallFrontCommand` carries `owner_player_index`; Open Eyes / Third Eye thread the owner from their hook contexts. Fresh Start's reshuffle clears every seat's list (reshuffle invalidates all visibility, not just the owner's). The AI rule relaxed to "AI may read its own seat's known wall" — forward-compat documentation; M1 vanilla AIs still don't read it.
+- Strategy module in `src_tl/game/ai_strategy.tl` with explicit `StrategyModule` type so Teal can reason about both record fields (NEUTRAL_PERSONALITY, tile-value tables) and function exports without locking the inferred type. Exports: `compute_features`, `tile_value`, `estimate_fan_for_target`, `choose_target`, `compute_ukeire`, `pick_best_discard`, `has_three_fan_target`, and a `*_hypothetical` variant for call/kong simulation.
+- `estimate_fan_for_target` builds a synthetic ScoreResult from the target's implied structural facts and routes it through `effect_runner.apply_score_modifiers`. Forward-compat boon path is exercised by a synthetic-effect test (`T19`) — when AIs gain real boons in a later slice, the wiring is already in place.
+- `evaluate_hu` (in ai.tl) is unchanged and continues to handle Hu legality at ting via the validator + scorer + runner chain. The strategy module distinguishes pre-ting (estimate_fan_for_target) from at-ting (evaluate_hu).
+- Tile-value tables: `SEQUENCE_VALUE` (terminal=1 → mid=4) for sequence-leaning targets; `TRIPLET_VALUE` (honor=1 → dragon=4, seat/round wind +1) for `dui_dui_hu`. Used as discard tiebreakers.
+- Discard heuristic ranks candidates by (live_ting_after, tile_value, tile_id). Ukeire is computed once on the chosen candidate (per-candidate ukeire was 30× too expensive for the inner loop and rarely changed the ranking outcome).
+- Reaction logic accepts open kong / peng / chi only when both ting-not-regressed and the resulting hand still has a 3-fan-reachable target (`has_three_fan_target_hypothetical`). Concealed and added Kong gain the same gate.
+- `has_three_fan_target` delegates to `choose_target` so the gate uses `(target_fitness × est_fan ≥ 3)` semantics, mirroring what the AI will actually pursue. An earlier "any target reaches 3 fan" version was over-optimistic and reported every hand as 3-fan-reachable since dui_dui_hu's base is 3.
+- `target_fitness` tuned so `qing_yi_se` wins when honors are absent and `hun_yi_se` wins when honors are present (formerly tied at max_suit_count when honor_count=0).
+- Inspector renders an extra reasoning segment per AI seat: `[hun_yi_se est=5f uke=8]`. Non-target reasoning tags (pass_reaction, zi_mo, hu_on_discard) leave it empty.
+- Engine fix found in passing: `apply_hu_on_discard` was clearing `has_pending_discard` without moving the discarded tile anywhere, so the tile silently leaked from the conservation invariant whenever a non-zi-mo Hu landed (latent since S03; the existing hu-on-discard spec didn't validate conservation post-resolution). Fixed by appending the tile to the discarder's discards before clearing the flag. The score is unaffected because it captures the tile snapshot at scoring time.
+- DECISIONS entries: D008 (target-pattern AI strategy with `AiPersonality` + boon-aware projected fan via the runner), D009 (per-player Known Wall).
+- `make test` passes 186 / 0 / 0 (172 baseline + 14 new strategy tests). Runtime 5.6s (was 2s pre-S06 — the increase is the strategy module's per-decision work; manual playtest perception is snappy).
+- Manual playtest acceptance (`T20`): headless driver ran seeds 42, 1, 100, 12345, 7 (the prescribed five) plus 99, 200, 555, 2025, 31415 for additional sample. Outcomes:
+  - Hu: seed=100 (p1 zi mo), 12345 (p1), 99 (p4 zi mo), 200 (p4), 555 (p3 zi mo), 31415 (p4) — 6 of 10.
+  - Wall exhaustion: seeds 42, 1, 7, 2025 — 4 of 10. All exhaustions are justified per inspector: each seat is either at ting on a sub-3-fan path (`3fan_reachable=false`) or at ting waiting on a tile that didn't appear before the wall ran out.
+  - 0 stuck/error.
+- Merged via PR #(TBD) with the combined Known Wall migration + Smart AI heuristic + engine fix in one commit history.
 
 ### S07: Playable Round 1 UI
 
