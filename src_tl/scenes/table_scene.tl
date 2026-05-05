@@ -20,7 +20,6 @@ local ai         = require("game.ai")
 local td         = require("game.ting_distance")
 local invariants = require("game.deal_invariants")
 local validator  = require("game.hand_validator")
-local scorer_mod = require("game.scorer")
 local fx_runner  = require("effects.effect_runner")
 local wall_mod   = require("game.wall")
 local content    = require("content.boons")
@@ -32,6 +31,7 @@ local info_panels   = require("ui.info_panels")
 local clickable_mod = require("ui.clickable")
 local panel         = require("ui.panel")
 local button        = require("ui.button")
+local scoring       = require("game.scoring")
 local scene_stack   = require("app.scene_stack")
 
 local M = {}
@@ -337,22 +337,13 @@ end
 local compute_seat1_reaction_options: function(d: DealState): {ActionPromptOption}
 local options_cached:                 function(d: DealState, kind: string): {ActionPromptOption}
 
--- Forward declarations. is_men_qian and score_with_modifiers live near
--- the inspector helpers; would_be_valid_hu calls them up here so the
--- option enumerators can gate the Hu prompt at the same fan threshold
--- the engine uses.
-local is_men_qian: function(player: PlayerState): boolean
-local score_with_modifiers: function(d: DealState, seat: integer, shapes: {WinShape}, ctx: ScoreContext): (ScoreResult, boolean)
-
 -- True iff declaring Hu with `incoming_tile` as the winning tile would
--- pass the engine's fan threshold. Used to gate the Hu prompt for the
--- player so we never show "Hu" when clicking it would error.
+-- pass the engine's fan threshold. Routes through the shared scoring
+-- pipeline so the player's Hu prompt cannot drift from the engine.
 local function would_be_valid_hu(d: DealState, seat: integer, incoming_tile: Tile, is_zi_mo: boolean, is_qiang_gang: boolean): boolean
    local p = d.players[seat]
    local concealed: {Tile}
    if is_zi_mo then
-      -- Zi Mo: incoming is the just-drawn tile already in concealed;
-      -- pull it out to match find_win_shapes' expectation.
       concealed = {}
       local removed = false
       for _, t in ipairs(p.hand.concealed_tiles) do
@@ -365,22 +356,8 @@ local function would_be_valid_hu(d: DealState, seat: integer, incoming_tile: Til
    else
       concealed = p.hand.concealed_tiles
    end
-   local shapes = validator.find_win_shapes(concealed, incoming_tile, p.hand.sets)
-   if #shapes == 0 then return false end
-   local ctx: ScoreContext = {
-      incoming_tile = incoming_tile,
-      has_incoming  = true,
-      is_zi_mo      = is_zi_mo,
-      is_men_qian   = is_men_qian(p),
-      is_hai_di     = false,
-      is_gang_shang = false,
-      is_qiang_gang = is_qiang_gang,
-      round_wind    = d.round_wind,
-      seat_wind     = p.seat_wind,
-   }
-   local result, ok = score_with_modifiers(d, seat, shapes, ctx)
-   if not ok then return false end
-   return result.valid_hu
+   local valid, _ = scoring.evaluate_hu(d, seat, concealed, incoming_tile, is_zi_mo, false, is_qiang_gang)
+   return valid
 end
 
 -- True when run mode and seat 1 must make a decision the AI shouldn't
@@ -842,13 +819,6 @@ local function opening_selection_label(): string
    return table.concat(labels, " ")
 end
 
-function is_men_qian(player: PlayerState): boolean
-   for _, s in ipairs(player.hand.sets) do
-      if (s.visibility as string) == "open" then return false end
-   end
-   return true
-end
-
 local function ting_for(seat_index: integer): integer
    local p = state.deal.players[seat_index]
    local live = ai.compute_live_counts(state.deal, seat_index)
@@ -1280,49 +1250,17 @@ local function draw_log(x: number, y: number, w: number, h: number)
    end
 end
 
-function score_with_modifiers(
-   d: DealState,
-   seat: integer,
-   shapes: {WinShape},
-   ctx: ScoreContext
-): ScoreResult, boolean
-   local out = scorer_mod.score_hand(shapes, ctx)
-   if not out.has_best then return {} as ScoreResult, false end
-   local best = fx_runner.apply_score_modifiers(d, ctx, shapes[1], out.candidates[1], seat)
-   for i = 2, #out.candidates do
-      local candidate = fx_runner.apply_score_modifiers(d, ctx, shapes[i], out.candidates[i], seat)
-      local best_rank = best.is_limit and 10000 or best.total_fan
-      local candidate_rank = candidate.is_limit and 10000 or candidate.total_fan
-      if candidate_rank > best_rank then best = candidate end
-   end
-   return best, true
-end
-
 local function draw_score_candidates_for(seat: integer, x: number, y: number): number
    local d = state.deal
    local p = d.players[seat]
    if ting_for(seat) > -1 then return y end
-   -- For inspector preview, walk the wall front to find which upcoming tile would win.
    for i = 1, math.min(8, #d.wall.tiles) do
       local incoming = d.wall.tiles[i]
       local shapes = validator.find_win_shapes(p.hand.concealed_tiles, incoming, p.hand.sets)
       if #shapes > 0 then
-         local ctx: ScoreContext = {
-            incoming_tile = { tile_id = "" as TileId, kind_id = "" as TileKindId },
-            has_incoming  = true,
-            is_zi_mo      = false,
-            is_men_qian   = is_men_qian(p),
-            is_hai_di     = false,
-            is_gang_shang = false,
-            is_qiang_gang = false,
-            round_wind    = d.round_wind,
-            seat_wind     = p.seat_wind,
-         }
-         local final, ok = score_with_modifiers(d, seat, shapes, ctx)
-         if ok then
-            draw_text(string.format("    cand: +%s → fan=%d valid=%s", tile_label(incoming), final.total_fan, tostring(final.valid_hu)), x, y)
-            y = y + 14
-         end
+         local valid, final = scoring.evaluate_hu(d, seat, p.hand.concealed_tiles, incoming, false, false, false)
+         draw_text(string.format("    cand: +%s → fan=%d valid=%s", tile_label(incoming), final.total_fan, tostring(valid)), x, y)
+         y = y + 14
       end
    end
    return y

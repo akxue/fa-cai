@@ -14,6 +14,7 @@ local tiles_mod   = require("game.tiles")
 local calls_mod   = require("game.calls")
 local scorer_mod  = require("game.scorer")
 local fx_runner   = require("effects.effect_runner")
+local scoring     = require("game.scoring")
 
 local M = {}
 
@@ -310,57 +311,11 @@ end
 
 -- ── Effect score modifier integration ─────────────────────────────────────
 
--- Routes the best ScoreResult through the effect runner so registered boons
--- can append ScoreReasons before total_fan/valid_hu are recomputed. Boons
--- cannot bypass shape validation (input is the scorer's chosen shape).
-local function apply_score_modifiers(
-   deal:           DealState,
-   ctx:            ScoreContext,
-   shapes:         {WinShape},
-   output:         ScorerOutput,
-   winner_index:   integer
-): ScoreResult
-   if not output.has_best then return output.best end
+local apply_score_modifiers = scoring.apply_score_modifiers
+local build_score_ctx       = scoring.build_score_ctx
 
-   local best = fx_runner.apply_score_modifiers(deal, ctx, shapes[1], output.candidates[1], winner_index)
-   for i = 2, #output.candidates do
-      local candidate = fx_runner.apply_score_modifiers(deal, ctx, shapes[i], output.candidates[i], winner_index)
-      local best_rank = best.total_fan
-      local candidate_rank = candidate.total_fan
-      if best.is_limit then best_rank = 10000 end
-      if candidate.is_limit then candidate_rank = 10000 end
-      if candidate_rank > best_rank then
-         best = candidate
-      end
-   end
-   return best
-end
-
--- Re-evaluates valid_hu after boon ScoreReasons; mirrors scorer's threshold.
 local function score_passes_threshold(r: ScoreResult): boolean
    return r.valid_hu
-end
-
--- ── Score context ──────────────────────────────────────────────────────────
-
-local function build_score_ctx(deal: DealState, player_index: integer, is_zi_mo: boolean, is_gang_shang: boolean, is_qiang_gang: boolean): ScoreContext
-   local open_sets = deal.players[player_index].hand.sets
-   local is_men_qian = true
-   for _, s in ipairs(open_sets) do
-      if (s.visibility as string) == "open" then is_men_qian = false; break end
-   end
-   local is_hai_di = is_zi_mo and wall_mod.remaining(deal.wall) == 0
-   return {
-      incoming_tile = { tile_id = "" as TileId, kind_id = "" as TileKindId },
-      has_incoming  = not is_zi_mo,
-      is_zi_mo      = is_zi_mo,
-      is_men_qian   = is_men_qian,
-      is_hai_di     = is_hai_di,
-      is_gang_shang = is_gang_shang,
-      is_qiang_gang = is_qiang_gang,
-      round_wind    = deal.round_wind,
-      seat_wind     = deal.players[player_index].seat_wind,
-   }
 end
 
 -- ── Opening deal ──────────────────────────────────────────────────────────
