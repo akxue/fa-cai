@@ -330,6 +330,52 @@ end
 -- defined later in the file.
 local compute_seat1_reaction_options: function(d: DealState): {ActionPromptOption}
 
+-- Forward declarations. is_men_qian and score_with_modifiers live near
+-- the inspector helpers; would_be_valid_hu calls them up here so the
+-- option enumerators can gate the Hu prompt at the same fan threshold
+-- the engine uses.
+local is_men_qian: function(player: PlayerState): boolean
+local score_with_modifiers: function(d: DealState, seat: integer, shapes: {WinShape}, ctx: ScoreContext): (ScoreResult, boolean)
+
+-- True iff declaring Hu with `incoming_tile` as the winning tile would
+-- pass the engine's fan threshold. Used to gate the Hu prompt for the
+-- player so we never show "Hu" when clicking it would error.
+local function would_be_valid_hu(d: DealState, seat: integer, incoming_tile: Tile, is_zi_mo: boolean, is_qiang_gang: boolean): boolean
+   local p = d.players[seat]
+   local concealed: {Tile}
+   if is_zi_mo then
+      -- Zi Mo: incoming is the just-drawn tile already in concealed;
+      -- pull it out to match find_win_shapes' expectation.
+      concealed = {}
+      local removed = false
+      for _, t in ipairs(p.hand.concealed_tiles) do
+         if not removed and t.tile_id == incoming_tile.tile_id then
+            removed = true
+         else
+            concealed[#concealed + 1] = t
+         end
+      end
+   else
+      concealed = p.hand.concealed_tiles
+   end
+   local shapes = validator.find_win_shapes(concealed, incoming_tile, p.hand.sets)
+   if #shapes == 0 then return false end
+   local ctx: ScoreContext = {
+      incoming_tile = incoming_tile,
+      has_incoming  = true,
+      is_zi_mo      = is_zi_mo,
+      is_men_qian   = is_men_qian(p),
+      is_hai_di     = false,
+      is_gang_shang = false,
+      is_qiang_gang = is_qiang_gang,
+      round_wind    = d.round_wind,
+      seat_wind     = p.seat_wind,
+   }
+   local result, ok = score_with_modifiers(d, seat, shapes, ctx)
+   if not ok then return false end
+   return result.valid_hu
+end
+
 -- True when run mode and seat 1 must make a decision the AI shouldn't
 -- make for them. The auto-advance path stops here. Skip the pause when
 -- the only legal reaction is Pass — the AI driver auto-passes for
@@ -397,11 +443,11 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
    local p = d.players[1]
    local hand = p.hand.concealed_tiles
 
-   -- Hu on a discard
+   -- Hu on a discard. Gate on would_be_valid_hu so the prompt never
+   -- offers a click that the engine would reject (3-fan minimum).
    if d.has_pending_discard then
       local pd_tile = d.pending_discard.tile
-      local shapes = validator.find_win_shapes(hand, pd_tile, p.hand.sets)
-      if #shapes > 0 then
+      if would_be_valid_hu(d, 1, pd_tile, false, false) then
          opts[#opts + 1] = {
             key        = "h",
             label      = "Hu (claim " .. tile_label(pd_tile) .. ")",
@@ -413,8 +459,7 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
    -- Hu on Qiang Gang (rob a kong upgrade)
    if d.has_pending_kong then
       local pk_tile = d.pending_added_kong.tile
-      local shapes = validator.find_win_shapes(hand, pk_tile, p.hand.sets)
-      if #shapes > 0 then
+      if would_be_valid_hu(d, 1, pk_tile, false, true) then
          opts[#opts + 1] = {
             key        = "h",
             label      = "Hu / Qiang Gang " .. tile_label(pk_tile),
@@ -471,28 +516,20 @@ local function compute_seat1_self_options(d: DealState): {ActionPromptOption}
    local p = d.players[1]
    local hand = p.hand.concealed_tiles
 
-   -- Zi Mo Hu using the last drawn tile
+   -- Zi Mo Hu using the last drawn tile (gated on fan threshold).
    if d.has_last_drawn then
       local last_id = d.last_drawn_tile_id
       local last_tile: Tile = nil
-      local rest: {Tile} = {}
       for _, t in ipairs(hand) do
-         if last_tile == nil and t.tile_id == last_id then
-            last_tile = t
-         else
-            rest[#rest + 1] = t
-         end
+         if t.tile_id == last_id then last_tile = t; break end
       end
-      if last_tile ~= nil then
-         local shapes = validator.find_win_shapes(rest, last_tile, p.hand.sets)
-         if #shapes > 0 then
-            opts[#opts + 1] = {
-               key        = "h",
-               label      = "Hu / Zi Mo " .. tile_label(last_tile),
-               action     = engine.declare_hu(1, last_id, true),
-               has_action = true,
-            }
-         end
+      if last_tile ~= nil and would_be_valid_hu(d, 1, last_tile, true, false) then
+         opts[#opts + 1] = {
+            key        = "h",
+            label      = "Hu / Zi Mo " .. tile_label(last_tile),
+            action     = engine.declare_hu(1, last_id, true),
+            has_action = true,
+         }
       end
    end
 
@@ -822,7 +859,7 @@ local function opening_selection_label(): string
    return table.concat(labels, " ")
 end
 
-local function is_men_qian(player: PlayerState): boolean
+function is_men_qian(player: PlayerState): boolean
    for _, s in ipairs(player.hand.sets) do
       if (s.visibility as string) == "open" then return false end
    end
@@ -987,12 +1024,12 @@ local function draw_seat_open_sets_col(seat_index: integer, x: number, y: number
    end
 end
 
--- Center discard pile. Iterates discards in round-robin chronology
--- (P1[i], P2[i], P3[i], P4[i], P1[i+1], …) so the visual stack-order
--- approximates how the deal actually unfolded; each tile is rendered
--- at a base grid slot with a deterministic jitter (hashed from tile_id)
--- for an organic, slightly-overlapping pile feel. The border color
--- identifies the discarder.
+-- Center discard pile. Iterates discards round-robin (P1[i], P2[i],
+-- P3[i], P4[i], P1[i+1], …) so the draw-order approximates the actual
+-- chronology — later tiles render on top of earlier ones, like a real
+-- pile. Each tile lands at a deterministic pseudo-random offset within
+-- a bounded pile region so tiles cluster and overlap; the border color
+-- still identifies the discarder.
 local function draw_center_discard_pile(x: number, y: number, w: number, h: number)
    love.graphics.setColor(0.13, 0.16, 0.18, 1.0)
    love.graphics.rectangle("fill", x, y, w, h)
@@ -1011,15 +1048,6 @@ local function draw_center_discard_pile(x: number, y: number, w: number, h: numb
       return
    end
 
-   local tile_w = 26
-   local tile_h = 32
-   local gap_x = 1
-   local gap_y = 1
-   local pad = 18
-   local pile_w = w - 2 * pad
-   local cols = math.floor((pile_w + gap_x) / (tile_w + gap_x))
-   if cols < 1 then cols = 1 end
-
    -- Round-robin interleave for an approximately-chronological order.
    local items: {DiscardItem} = {}
    for i = 1, max_n do
@@ -1031,28 +1059,33 @@ local function draw_center_discard_pile(x: number, y: number, w: number, h: numb
       end
    end
 
-   local n = #items
-   local rows = math.ceil(n / cols)
-   local total_w = cols * tile_w + (cols - 1) * gap_x
-   local total_h = rows * tile_h + (rows - 1) * gap_y
-   local start_x = x + (w - total_w) / 2
-   local start_y = y + math.max(pad, (h - total_h) / 2)
+   -- Pile region: a centered rectangle smaller than the full panel so
+   -- tiles cluster rather than spread to the edges. Scaled to the
+   -- shorter dimension so the pile looks compact and "thrown" rather
+   -- than orderly.
+   local tile_w = 30
+   local tile_h = 38
+   local pile_w = math.min(w - 24, 480)
+   local pile_h = math.min(h - 24, 280)
+   local pile_cx = x + w / 2
+   local pile_cy = y + h / 2
+   local span_x = pile_w / 2 - tile_w / 2
+   local span_y = pile_h / 2 - tile_h / 2
 
    for i, item in ipairs(items) do
-      local col = (i - 1) % cols
-      local row = math.floor((i - 1) / cols)
-      local base_x = start_x + col * (tile_w + gap_x)
-      local base_y = start_y + row * (tile_h + gap_y)
-
-      -- Deterministic jitter from a small hash over tile_id.
+      -- Hash incorporates the chronological index so identical tile
+      -- copies (the wall has 4 of each kind) land in different spots.
       local s = item.tile.tile_id as string
-      local hh = 0
-      for j = 1, #s do hh = (hh * 31 + s:byte(j)) % 4096 end
-      local jx = (hh % 7) - 3
-      local jy = (math.floor(hh / 7) % 5) - 2
-
-      local tx = base_x + jx
-      local ty = base_y + jy
+      local h1 = i * 257
+      local h2 = i * 263
+      for j = 1, #s do
+         h1 = (h1 * 31 + s:byte(j)) % 65536
+         h2 = (h2 * 37 + s:byte(j)) % 65536
+      end
+      local fx = (h1 / 65535) - 0.5  -- in [-0.5, 0.5]
+      local fy = (h2 / 65535) - 0.5
+      local tx = pile_cx + fx * 2 * span_x - tile_w / 2
+      local ty = pile_cy + fy * 2 * span_y - tile_h / 2
 
       local color = SEAT_COLORS[item.seat]
       tile_render.draw_tile_box(item.tile, tx, ty, tile_w, tile_h,
@@ -1272,7 +1305,7 @@ local function draw_log(x: number, y: number, w: number, h: number)
    end
 end
 
-local function score_with_modifiers(
+function score_with_modifiers(
    d: DealState,
    seat: integer,
    shapes: {WinShape},
