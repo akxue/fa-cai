@@ -29,6 +29,7 @@ local calls_mod  = require("game.calls")
 local tile_render   = require("ui.tile_render")
 local action_prompt = require("ui.action_prompt")
 local info_panels   = require("ui.info_panels")
+local scene_stack   = require("app.scene_stack")
 
 local M = {}
 
@@ -78,6 +79,12 @@ local record SceneState
    -- string when there is no current selection; ensure_cursor_valid()
    -- defaults it to the last drawn tile.
    cursor_tile_id: TileId
+   -- Run-state reference so table_scene can decrement lives and route
+   -- to reward/result scenes when the deal ends.
+   run_state: RunState
+   -- One-shot guard so the deal_over → reward/result transition only
+   -- fires once per deal.
+   transitioned: boolean
 end
 
 local state: SceneState = nil
@@ -154,6 +161,8 @@ local function reset(seed: integer)
       selected_opening_tile_ids = {},
       last_reason_by_seat = {},
       cursor_tile_id   = "" as TileId,
+      run_state        = rs,
+      transitioned     = false,
    }
    push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. " mode=" .. mode .. ")")
    check_conservation()
@@ -593,9 +602,23 @@ function M.load()
    reset(DEFAULT_SEED)
 end
 
+-- Hand off to reward/result scenes after deal_over in run mode. Routed
+-- through scene_stack.fire_deal_over so this scene does not statically
+-- import reward_scene or result_scene (which would create a cycle with
+-- start_scene → boon_select_scene → table_scene). main.tl installs the
+-- concrete handler at startup.
+local function transition_after_deal_over()
+   if state.transitioned then return end
+   state.transitioned = true
+   scene_stack.fire_deal_over(state.deal, state.run_state)
+end
+
 function M.update(dt: number)
    if state.deal == nil then return end
-   if (state.deal.phase as string) == "deal_over" then return end
+   if (state.deal.phase as string) == "deal_over" then
+      if state.mode == "run" then transition_after_deal_over() end
+      return
+   end
    if state.step_mode and state.wait_for_step then return end
    -- In run mode, hand control to the player when seat 1 owes the next
    -- decision. Drawing (awaiting_draw) is automatic and stays AI-driven.
