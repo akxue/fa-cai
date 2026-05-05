@@ -136,7 +136,8 @@ local record StrategyModule
    has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
    max_feasible_est_fan:              function(DealState, integer): integer
    max_feasible_est_fan_hypothetical: function(DealState, integer, {Tile}, {TileSet}): integer
-   kong_post_supplement_avg_fan:      function(DealState, integer, {Tile}, {TileSet}, {string: integer}): number
+   post_call_best_candidate_hypothetical: function(DealState, integer, {Tile}, {TileSet}, {string: integer}, AiPersonality): (CandidateAction, boolean)
+   kong_post_supplement_avg_fan:      function(DealState, integer, {Tile}, {TileSet}, {string: integer}, AiPersonality): number
    post_call_ting:                    function({Tile}, {TileSet}, {string: integer}): integer
    evaluate_discard_candidates:       function(DealState, integer, AiPersonality, TargetKind, {string: integer}): {CandidateAction}
    enrich_candidate:                  function(DealState, integer, TargetKind, {string: integer}, CandidateAction)
@@ -250,7 +251,7 @@ function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
    --   * Track which suits / honors have been committed via open sets, so
    --     qing_yi_se and hun_yi_se feasibility can be gated.
    --   * Add open-set tiles to suit_counts / honor_count before choosing the
-   --     dominant suit, so target_fitness sees the full committed picture.
+   --     dominant suit, so target distribution sees the full committed picture.
    local open_set_count = #sets
    local has_open = false
    local open_chi_count = 0
@@ -618,7 +619,7 @@ end
 --                            shape ting)
 --   depletion_t            — visible_depletion(t)
 --   fan_t                  — estimate_fan_for_target(t) (post-action hand)
---   p_reach(t)             = feasible × 1 / (ting_t + 1)² × (1 - depletion)
+--   p_reach(t)             = feasible × (1 - depletion) / (1 + ting/misfit penalties)
 --   contribution_t         = p_reach(t) × fan_t
 --
 -- Returns: (target_distribution: {t → contribution}, expected_fan: total,
@@ -628,6 +629,12 @@ local TARGETS: {TargetKind} = {
    "default" as TargetKind, "dui_dui_hu" as TargetKind,
    "hun_yi_se" as TargetKind, "qing_yi_se" as TargetKind,
 }
+
+local function target_weight(personality: AiPersonality, target: TargetKind): number
+   local w = personality.target_weights[target as string]
+   if w == nil then return 1.0 end
+   return w
+end
 
 local function target_feasible(target: TargetKind, feat: HandFeatures): boolean
    local t = target as string
@@ -674,14 +681,14 @@ end
 local function target_misfit(target: TargetKind, feat: HandFeatures): number
    local t = target as string
    if t == "qing_yi_se" then
-      return 2.0 * ((feat.honor_count + feat.off_suit_count) as number)
+      return 4.0 * ((feat.honor_count + feat.off_suit_count) as number)
    elseif t == "hun_yi_se" then
-      return 2.0 * (feat.off_suit_count as number)
+      return 4.0 * (feat.off_suit_count as number)
    elseif t == "dui_dui_hu" then
       local groups = feat.pair_count   -- includes triplets (counted by ≥2)
       local short = 4 - groups
       if short < 0 then short = 0 end
-      return 2.0 * (short as number)
+      return 4.0 * (short as number)
    end
    return 0.0
 end
@@ -717,9 +724,10 @@ function M.expected_fan_dist(
          local fan_t = M.estimate_fan_for_target(deal, player_index, t)
          if fan_t > 0 then
             local depletion = M.visible_depletion(t, feat, live, p.seat_wind, deal.round_wind)
-            local effective_ting = (ting as number) + target_misfit(t, feat)
-            local denom = (effective_ting + 1.0) * (effective_ting + 1.0)
-            local p_reach = (1.0 - depletion) / denom
+            local penalty = ((ting as number) * 0.05) + (target_misfit(t, feat) * 0.12)
+            local p_reach = (1.0 - depletion) / (1.0 + penalty)
+            if p_reach < 0.0 then p_reach = 0.0 end
+            if p_reach > 1.0 then p_reach = 1.0 end
             contribution = p_reach * (fan_t as number)
          end
       end
@@ -742,10 +750,19 @@ end
 function M.choose_target(
    deal:         DealState,
    player_index: integer,
-   _personality: AiPersonality,
+   personality:  AiPersonality,
    live:         {string: integer}
 ): TargetKind, integer
-   local _dist, _total, dominant = M.expected_fan_dist(deal, player_index, live)
+   local dist, _total, _dominant = M.expected_fan_dist(deal, player_index, live)
+   local dominant: TargetKind = "default" as TargetKind
+   local best: number = -1.0
+   for _, t in ipairs(TARGETS) do
+      local weighted = (dist[t as string] or 0.0) * target_weight(personality, t)
+      if weighted > best then
+         best = weighted
+         dominant = t
+      end
+   end
    local est_fan = M.estimate_fan_for_target(deal, player_index, dominant)
    return dominant, est_fan
 end
@@ -806,7 +823,7 @@ end
 function M.evaluate_discard_candidates(
    deal:         DealState,
    player_index: integer,
-   _personality: AiPersonality,
+   personality:  AiPersonality,
    _target:      TargetKind,
    live:         {string: integer}
 ): {CandidateAction}
@@ -826,6 +843,18 @@ function M.evaluate_discard_candidates(
       local rest = tiles_without_id(concealed, t.tile_id)
       p.hand.concealed_tiles = rest
       local dist, expected_fan, dominant = M.expected_fan_dist(deal, player_index, live)
+      expected_fan = 0.0
+      local weighted_best: number = -1.0
+      for _, target_kind in ipairs(TARGETS) do
+         local key = target_kind as string
+         local weighted = (dist[key] or 0.0) * target_weight(personality, target_kind)
+         dist[key] = weighted
+         expected_fan = expected_fan + weighted
+         if weighted > weighted_best then
+            weighted_best = weighted
+            dominant = target_kind
+         end
+      end
       local feat_after = M.compute_features(rest, p.hand.sets)
       local depletion = M.visible_depletion(dominant, feat_after, live, p.seat_wind, deal.round_wind)
       local after_ting = td.ting_distance_live(rest, p.hand.sets, live)
@@ -1008,18 +1037,17 @@ function M.has_three_fan_target_hypothetical(
    return v
 end
 
--- Post-call gate (S07 commit 4 / T16): build the post-call hand, run the
--- candidate pipeline on it, and return the best discard candidate's
--- `expected_fan`. The call gate accepts iff this value ≥ 3 (commit 4
--- threshold). Returns 0 when the post-call hand has no legal discards
--- (would never happen for a real call but defended for safety).
+-- Post-call gate (S07 T16): build the post-call hand, run the candidate
+-- pipeline on it, and return the best discard candidate. To keep the gate
+-- comparable to the 3-fan Hu floor, the candidate's expected_fan is floored
+-- at the post-call feasible fan ceiling after the best discard is selected.
 --
 -- This naturally rejects "run-breaking" calls — e.g., a chi that consumes
 -- a forming bing sequence drops the post-call best candidate's expected
 -- fan because the dominant target's probability collapses. has_three_fan_-
 -- target_hypothetical only checked if any 3-fan target was reachable in
--- principle; this variant checks if the AI's best follow-up is *good
--- enough* given probability and depletion.
+-- principle; this variant first finds the best follow-up candidate, then
+-- applies the fan floor to that candidate.
 -- Returns the max est_fan across all feasible targets on the player's
 -- current hand state. "Feasible" uses target_feasible (the structural
 -- gates from compute_features). Used by the call-gate logic as a robust
@@ -1058,13 +1086,60 @@ function M.max_feasible_est_fan_hypothetical(
    return v
 end
 
+function M.post_call_best_candidate_hypothetical(
+   deal:                   DealState,
+   player_index:           integer,
+   hypothetical_concealed: {Tile},
+   hypothetical_sets:      {TileSet},
+   live:                   {string: integer},
+   personality:            AiPersonality
+): CandidateAction, boolean
+   local p = deal.players[player_index]
+   local saved_concealed = p.hand.concealed_tiles
+   local saved_sets      = p.hand.sets
+   p.hand.concealed_tiles = hypothetical_concealed
+   p.hand.sets            = hypothetical_sets
+   local target, _est = M.choose_target(deal, player_index, personality, live)
+   local cands = M.evaluate_discard_candidates(deal, player_index, personality, target, live)
+   local ranked = M.rank_candidates(cands, personality)
+   local ok = #ranked > 0
+   local best: CandidateAction
+   if ok then
+      best = ranked[1]
+      M.enrich_candidate(deal, player_index, target, live, best)
+      local ceiling = M.max_feasible_est_fan(deal, player_index)
+      if (ceiling as number) > best.expected_fan then
+         best.expected_fan = ceiling as number
+         best.utility = ceiling as number
+      end
+   else
+      best = {
+         action               = { kind = "pass_reaction" } as DealAction,
+         tag                  = "none",
+         target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+         ting_after           = 100,
+         ukeire_after         = 0,
+         expected_fan         = 0.0,
+         visible_depletion    = 0.0,
+         danger               = 0.0,
+         utility              = 0.0,
+         accepted             = false,
+         rejection_reason     = "no_post_call_discard",
+      }
+   end
+   p.hand.concealed_tiles = saved_concealed
+   p.hand.sets            = saved_sets
+   return best, ok
+end
+
 -- Kong-specific variant (T19). Kongs trigger a supplement draw after the
 -- call. The "real" post-kong state isn't `hypothetical_concealed +
 -- hypothetical_sets` (10 + kong) — it's that hand plus one supplement
--- tile then a discard. This function averages max_feasible_est_fan
--- across the supplement-draw distribution, weighted by live counts:
+-- tile then a discard. This function averages the post-supplement best
+-- discard candidate's gated expected_fan across the supplement-draw
+-- distribution, weighted by live counts:
 --
---   avg = Σ_k [ live[k] * max_feasible_est_fan(post + tile_of_kind_k) ]
+--   avg = Σ_k [ live[k] * best_candidate_expected_fan(post + tile_kind_k) ]
 --         ──────────────────────────────────────────────────────────
 --                              Σ_k live[k]
 --
@@ -1089,7 +1164,8 @@ function M.kong_post_supplement_avg_fan(
    player_index:       integer,
    post_kong_concealed: {Tile},
    post_kong_sets:      {TileSet},
-   live:                {string: integer}
+   live:                {string: integer},
+   personality:         AiPersonality
 ): number
    local total: number = 0.0
    local weight: number = 0.0
@@ -1103,7 +1179,9 @@ function M.kong_post_supplement_avg_fan(
          local hyp: {Tile} = {}
          for _, t in ipairs(post_kong_concealed) do hyp[#hyp + 1] = t end
          hyp[#hyp + 1] = supp_tile
-         local v = M.max_feasible_est_fan_hypothetical(deal, player_index, hyp, post_kong_sets)
+         local best, ok = M.post_call_best_candidate_hypothetical(deal, player_index, hyp, post_kong_sets, live, personality)
+         local v: number = 0.0
+         if ok then v = best.expected_fan end
          total = total + (n as number) * (v as number)
          weight = weight + (n as number)
       end

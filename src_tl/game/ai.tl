@@ -50,18 +50,8 @@ local M: AiModule = {} as AiModule
 local PLAYER_COUNT <const> = 4
 local NA <const> = -100
 
--- Post-call gate (S07 commit 4 / T16, T17). The call is accepted iff the
--- post-call max-feasible-est_fan ≥ 3.
---
--- max_feasible_est_fan is the largest est_fan across all *structurally
--- feasible* targets (commit-3 feasibility was tightened so qing_yi_se /
--- hun_yi_se require committed suits to match the dominant suit).
--- Run-breaking calls (chi that commits a 2nd suit, kong that commits the
--- wrong suit relative to the player's dominant pile) flip the relevant
--- targets to infeasible, dropping max_feasible_est_fan past the floor.
--- Strategic shifts (e.g., open-kong tiao_1 to commit dui_dui_hu while
--- giving up qing_yi_se) keep at least one 3-fan target feasible and
--- still pass.
+-- Post-call gate (S07 T16, T17). The call is accepted iff the best
+-- post-call discard candidate has probability-weighted expected_fan ≥ 3.
 local POST_CALL_FAN_FLOOR <const>: integer = 3
 
 -- compute_live_counts now lives in ai_strategy.tl. Re-exported at the
@@ -186,6 +176,51 @@ local function mk_simple_candidate(action: DealAction, tag: string): CandidateAc
    }
 end
 
+local function mk_call_candidate(
+   action:           DealAction,
+   tag:              string,
+   best_after:       CandidateAction,
+   ting_after:       integer,
+   accepted:         boolean,
+   rejection_reason: string
+): CandidateAction
+   return {
+      action               = action,
+      tag                  = tag,
+      target_distribution  = best_after.target_distribution,
+      ting_after           = ting_after,
+      ukeire_after         = best_after.ukeire_after,
+      expected_fan         = best_after.expected_fan,
+      visible_depletion    = best_after.visible_depletion,
+      danger               = best_after.danger,
+      utility              = best_after.utility,
+      accepted             = accepted,
+      rejection_reason     = rejection_reason,
+   }
+end
+
+local function upgraded_added_kong_sets(sets: {TileSet}, fourth_tile: Tile): {TileSet}
+   local out: {TileSet} = {}
+   local upgraded = false
+   for _, s in ipairs(sets) do
+      if not upgraded and (s.kind as string) == "peng" and #s.tiles > 0 and s.tiles[1].kind_id == fourth_tile.kind_id then
+         local tiles: {Tile} = {}
+         for _, t in ipairs(s.tiles) do tiles[#tiles + 1] = t end
+         tiles[#tiles + 1] = fourth_tile
+         out[#out + 1] = {
+            kind        = "kong" as TileSetKind,
+            visibility  = s.visibility,
+            tiles       = tiles,
+            called_from = s.called_from,
+         }
+         upgraded = true
+      else
+         out[#out + 1] = s
+      end
+   end
+   return out
+end
+
 local function mk_reasoning(
    tag:        string,
    message:    string,
@@ -297,15 +332,34 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       local ak_id, ak_ok = find_added_kong_target(concealed, p.hand.sets)
       if ak_ok then
          local rest = tiles_without_id(concealed, ak_id)
+         local fourth_tile: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
+         for _, t in ipairs(concealed) do
+            if t.tile_id == ak_id then fourth_tile = t; break end
+         end
+         local sets_after = upgraded_added_kong_sets(p.hand.sets, fourth_tile)
          -- T19: kong gate uses supplement-draw averaging since the kong
          -- triggers a supplement draw before the next discard.
-         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, p.hand.sets, live)
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY)
+         local ak_action = engine.declare_added_kong(player_index, ak_id)
          if post_avg >= POST_CALL_FAN_FLOOR then
-            local ak_action = engine.declare_added_kong(player_index, ak_id)
             return ak_action, mk_reasoning(
                "added_kong", "added kong",
                target as string, NA, NA, -1, est_fan,
-               { mk_simple_candidate(ak_action, "added_kong") }
+               {
+                  {
+                     action               = ak_action,
+                     tag                  = "added_kong",
+                     target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+                     ting_after           = NA,
+                     ukeire_after         = -1,
+                     expected_fan         = post_avg,
+                     visible_depletion    = 0.0,
+                     danger               = 0.0,
+                     utility              = post_avg,
+                     accepted             = true,
+                     rejection_reason     = "",
+                  },
+               }
             )
          end
       end
@@ -336,13 +390,27 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
          for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
          sets_after[#sets_after + 1] = fake_set
          local after = td.ting_distance_live(rest, sets_after, live)
-         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live)
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY)
          if after <= before and post_avg >= POST_CALL_FAN_FLOOR then
             local ck_action = engine.declare_concealed_kong(player_index, quad_kind)
             return ck_action, mk_reasoning(
                "concealed_kong", "concealed kong " .. (quad_kind as string),
                target as string, before, after, -1, est_fan,
-               { mk_simple_candidate(ck_action, "concealed_kong") }
+               {
+                  {
+                     action               = ck_action,
+                     tag                  = "concealed_kong",
+                     target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+                     ting_after           = after,
+                     ukeire_after         = -1,
+                     expected_fan         = post_avg,
+                     visible_depletion    = 0.0,
+                     danger               = 0.0,
+                     utility              = post_avg,
+                     accepted             = true,
+                     rejection_reason     = "",
+                  },
+               }
             )
          end
       end
@@ -392,6 +460,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
 
    local p = deal.players[player_index]
    local concealed = p.hand.concealed_tiles
+   local rejected_candidates: {CandidateAction} = {}
 
    -- Hu on discard (or qiang gang on pending added kong).
    if deal.has_pending_discard then
@@ -462,14 +531,29 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             called_from = discarder,
          }
          local after = td.ting_distance_standard_live(rest, sets_after, live)
-         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live)
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY)
+         local ok_action = engine.declare_open_kong(player_index, discarded.tile_id)
+         local ok_candidate: CandidateAction = {
+            action               = ok_action,
+            tag                  = "open_kong",
+            target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+            ting_after           = after,
+            ukeire_after         = -1,
+            expected_fan         = post_avg,
+            visible_depletion    = 0.0,
+            danger               = 0.0,
+            utility              = post_avg,
+            accepted             = post_avg >= POST_CALL_FAN_FLOOR,
+            rejection_reason     = post_avg >= POST_CALL_FAN_FLOOR and "" or "post_kong_expected_fan_below_floor",
+         }
          if post_avg >= POST_CALL_FAN_FLOOR then
-            local ok_action = engine.declare_open_kong(player_index, discarded.tile_id)
             return ok_action, mk_reasoning(
                "open_kong", "open kong " .. (discarded.kind_id as string),
                target as string, before, after, -1, est_fan,
-               { mk_simple_candidate(ok_action, "open_kong") }
+               { ok_candidate }
             )
+         else
+            rejected_candidates[#rejected_candidates + 1] = ok_candidate
          end
       end
 
@@ -487,14 +571,21 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             called_from = discarder,
          }
          local after = strategy.post_call_ting(rest, sets_after, live)
-         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
-         if post_max >= POST_CALL_FAN_FLOOR then
-            local peng_action = engine.declare_peng(player_index, discarded.tile_id)
+         local best_after, best_ok = strategy.post_call_best_candidate_hypothetical(
+            deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY
+         )
+         local peng_action = engine.declare_peng(player_index, discarded.tile_id)
+         local accepted = best_ok and best_after.expected_fan >= POST_CALL_FAN_FLOOR
+         local rejection = accepted and "" or "post_call_expected_fan_below_floor"
+         local peng_candidate = mk_call_candidate(peng_action, "peng", best_after, after, accepted, rejection)
+         if accepted then
             return peng_action, mk_reasoning(
                "peng", "peng " .. (discarded.kind_id as string),
                target as string, before, after, -1, est_fan,
-               { mk_simple_candidate(peng_action, "peng") }
+               { peng_candidate, best_after }
             )
+         else
+            rejected_candidates[#rejected_candidates + 1] = peng_candidate
          end
       end
 
@@ -527,14 +618,21 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
                called_from = discarder,
             }
             local after = strategy.post_call_ting(rest, sets_after, live)
-            local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
-            if post_max >= POST_CALL_FAN_FLOOR then
-               local chi_action = engine.declare_chi(player_index, discarded.tile_id, pair)
+            local best_after, best_ok = strategy.post_call_best_candidate_hypothetical(
+               deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY
+            )
+            local chi_action = engine.declare_chi(player_index, discarded.tile_id, pair)
+            local accepted = best_ok and best_after.expected_fan >= POST_CALL_FAN_FLOOR
+            local rejection = accepted and "" or "post_call_expected_fan_below_floor"
+            local chi_candidate = mk_call_candidate(chi_action, "chi", best_after, after, accepted, rejection)
+            if accepted then
                return chi_action, mk_reasoning(
                   "chi", "chi " .. (discarded.kind_id as string),
                   target as string, before, after, -1, est_fan,
-                  { mk_simple_candidate(chi_action, "chi") }
+                  { chi_candidate, best_after }
                )
+            else
+               rejected_candidates[#rejected_candidates + 1] = chi_candidate
             end
          end
       end
@@ -542,7 +640,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
 
    return engine.pass_reaction(player_index), mk_reasoning(
       "pass_reaction", "pass",
-      "", NA, NA, -1, -1, {}
+      "", NA, NA, -1, -1, rejected_candidates
    )
 end
 

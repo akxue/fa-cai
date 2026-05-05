@@ -764,7 +764,8 @@ local function draw_inspector(x: number, y: number, w: number, h: number)
             local fan = (c.expected_fan >= 0) and tostring(c.expected_fan) or "-"
             local uke = (c.ukeire_after >= 0) and tostring(c.ukeire_after) or "-"
             local ting_a = (c.ting_after > -100) and tostring(c.ting_after) or "-"
-            draw_text(string.format("    %s %s ting=%s uke=%s fan=%s", marker, label, ting_a, uke, fan), tx, ty)
+            local status = c.accepted and "" or (" reject=" .. c.rejection_reason)
+            draw_text(string.format("    %s %s ting=%s uke=%s fan=%s%s", marker, label, ting_a, uke, fan, status), tx, ty)
             ty = ty + 14
          end
       else

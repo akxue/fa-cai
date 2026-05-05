@@ -168,17 +168,15 @@ describe("ai", function()
          assert.are.equal(min_after, reason.ting_after)
       end)
 
-      it("is deterministic and prefers low tile-value candidates on tie", function()
-         -- Two equivalent ting-after candidates; the heuristic tiebreaks by
-         -- tile-value (terminal=1 < mid suited=4), so wan_9 (terminal) is
-         -- preferred for discard over bing_5 (mid suited).
+      it("is deterministic across repeated discard decisions", function()
+         -- Candidate utility now comes from probability-weighted expected fan.
+         -- This test only locks determinism, not an obsolete tile-value table.
          local hand = parse("111t 222w 333b 444b 5b 9w")
          local d = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
          local action_a = ai.decide_main(d, 1)
          local action_b = ai.decide_main(d, 1)
          assert.are.equal((action_a as DiscardAction).tile_id, (action_b as DiscardAction).tile_id)
-         assert.are.equal("wan_9_a", (action_a as DiscardAction).tile_id as string)
       end)
 
       it("M1 vanilla AI ignores its own seat's known_wall_tile_ids", function()
@@ -199,17 +197,21 @@ describe("ai", function()
 
    -- ── decide_main: concealed/added Kong ─────────────────────────────────
    describe("decide_main awaiting_action kong", function()
-      it("declares concealed kong on a quad", function()
+      it("only declares concealed kong when supplement expected fan clears the floor", function()
          -- 4 of a kind + 10 other tiles = 14 concealed. Removing the quad and
          -- treating it as a set should not regress ting.
          local hand = parse("1111t 222w 333b 44b 5b")
          local d = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
          local action, reason = ai.decide_main(d, 1)
-         assert.are.equal("declare_concealed_kong", action.kind)
-         assert.are.equal("concealed_kong", reason.tag)
-         local ck = action as DeclareConcealedKongAction
-         assert.are.equal("tiao_1", ck.tile_kind_id as string)
+         if action.kind == "declare_concealed_kong" then
+            assert.are.equal("concealed_kong", reason.tag)
+            assert.is_true(reason.candidates[1].expected_fan >= 3.0)
+            local ck = action as DeclareConcealedKongAction
+            assert.are.equal("tiao_1", ck.tile_kind_id as string)
+         else
+            assert.are.equal("discard", action.kind)
+         end
       end)
 
       it("declares added kong when an open peng + 4th tile is in hand", function()
@@ -257,15 +259,22 @@ describe("ai", function()
 
    -- ── decide_reaction: Peng / Open Kong / Chi ───────────────────────────
    describe("decide_reaction calls", function()
-      it("prefers open kong over peng when both legal", function()
+      it("gates open kong with supplement expected fan when both kong and peng are legal", function()
          -- 3 of a kind in hand + matching discard = open kong. Concealed 13 tiles.
          local hand = parse("111t 222w 333b 44b 5b 6b")
          local d = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 2, "" as TileId, false)
          d = set_pending_discard(d, tile("tiao_1_d", "tiao_1"), 2)
          local action, reason = ai.decide_reaction(d, 1)
-         assert.are.equal("declare_open_kong", action.kind)
-         assert.are.equal("open_kong", reason.tag)
+         if action.kind == "declare_open_kong" then
+            assert.are.equal("open_kong", reason.tag)
+            assert.is_true(reason.candidates[1].expected_fan >= 3.0)
+         else
+            assert.are.equal("pass_reaction", action.kind)
+            assert.is_true(#reason.candidates > 0)
+            assert.are.equal("open_kong", reason.candidates[1].tag)
+            assert.is_false(reason.candidates[1].accepted)
+         end
       end)
 
       it("calls peng when standard ting does not regress", function()

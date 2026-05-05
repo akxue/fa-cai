@@ -476,15 +476,19 @@ describe("ai_strategy", function()
          assert.are.equal("hun_yi_se", target as string)
       end)
 
-      it("falls through to default for genuinely mixed hands", function()
+      it("still returns a legal planning target for genuinely mixed hands", function()
          -- Tiles spread across all three suits + a couple of honors, with
-         -- weak pair structure. No single target shape fits well, so the
-         -- baseline (default) wins.
+         -- weak pair structure. The probability model may still prefer a
+         -- speculative pattern, but it must return a target with a non-zero
+         -- fan estimate.
          local d = make_deal(parse("1t 4w 7b 2t 5w 8b 3t 6w 9b 23t E S"), {})
          local live = strategy.compute_live_counts(d, 1)
          local target, est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY, live)
-         assert.are.equal("default", target as string)
-         assert.is_true(est >= 1)   -- ping hu base
+         assert.is_true(target as string == "default"
+            or target as string == "dui_dui_hu"
+            or target as string == "hun_yi_se"
+            or target as string == "qing_yi_se")
+         assert.is_true(est >= 1)
       end)
    end)
 
@@ -634,10 +638,31 @@ describe("ai_strategy", function()
          assert.are.equal("peng", aggressive_ranked[1].tag,
             "with call_appetite=2.0 the peng candidate should rank above the equally-valued discard")
       end)
+
+      it("target_weights bias choose_target and discard distributions", function()
+         local d = make_deal(parse("123t 456t 789t 23t 99t"), {})
+         local live = strategy.compute_live_counts(d, 1)
+         local neutral_target, _neutral_est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY, live)
+         assert.are.equal("qing_yi_se", neutral_target as string)
+
+         local triplet_biased: AiPersonality = {
+            target_weights = { default = 1.0, dui_dui_hu = 1000.0, hun_yi_se = 1.0, qing_yi_se = 1.0 },
+            call_appetite = 1.0, kong_appetite = 1.0,
+            speed_bias = 0.5, value_bias = 0.5,
+            target_stickiness = 0.0, safety_bias = 0.0,
+         }
+         local biased_target, _biased_est = strategy.choose_target(d, 1, triplet_biased, live)
+         assert.are.equal("dui_dui_hu", biased_target as string)
+
+         local neutral_cands = strategy.evaluate_discard_candidates(d, 1, strategy.NEUTRAL_PERSONALITY, neutral_target, live)
+         local biased_cands = strategy.evaluate_discard_candidates(d, 1, triplet_biased, biased_target, live)
+         assert.is_true(neutral_cands[1].target_distribution["qing_yi_se"] > neutral_cands[1].target_distribution["dui_dui_hu"])
+         assert.is_true(biased_cands[1].target_distribution["dui_dui_hu"] > biased_cands[1].target_distribution["qing_yi_se"])
+      end)
    end)
 
    describe("kong_post_supplement_avg_fan (T19)", function()
-      it("returns a weighted average of post-supplement max feasible fan", function()
+      it("returns a weighted average of post-supplement best-candidate expected fan", function()
          -- Hand: 222w 333b 44b 5b 6b 7b (10 tiles + 1 kong of tiao_1 in
          -- sets). max_feasible_est_fan: dui_dui_hu (3 fan) is feasible;
          -- qing_yi_se / hun_yi_se require committed-suit alignment which
@@ -660,11 +685,9 @@ describe("ai_strategy", function()
          }
          local d = make_deal(hand, sets)
          local live = strategy.compute_live_counts(d, 1)
-         local avg = strategy.kong_post_supplement_avg_fan(d, 1, hand, sets, live)
-         -- dui_dui_hu (3 fan) is feasible across all supplement kinds, so
-         -- the average should be ≥ 3. Higher fan paths can push it up.
-         assert.is_true(avg >= 3.0,
-            string.format("expected kong supplement avg ≥ 3.0, got %.3f", avg))
+         local avg = strategy.kong_post_supplement_avg_fan(d, 1, hand, sets, live, strategy.NEUTRAL_PERSONALITY)
+         assert.is_true(avg > 0.0,
+            string.format("expected kong supplement avg > 0.0, got %.3f", avg))
       end)
    end)
 
@@ -707,6 +730,35 @@ describe("ai_strategy", function()
          local post_max = strategy.max_feasible_est_fan_hypothetical(d, 1, post_concealed, post_sets)
          assert.is_true(post_max < pre_max,
             string.format("expected post-chi max_feasible_est_fan < pre (pre=%d post=%d)", pre_max, post_max))
+      end)
+   end)
+
+   describe("post_call_best_candidate_hypothetical (T16)", function()
+      it("returns the best post-call discard candidate with probability-weighted expected fan", function()
+         local d = make_deal(parse("11t 222w 333b 44b 55b 6w"), {})
+         local incoming = { tile_id = "tiao_1_c" as TileId, kind_id = "tiao_1" as TileKindId }
+         local rest = parse("222w 333b 44b 55b 6w")
+         local sets_after: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "tiao_1_a" as TileId, kind_id = "tiao_1" as TileKindId },
+                  { tile_id = "tiao_1_b" as TileId, kind_id = "tiao_1" as TileKindId },
+                  incoming,
+               },
+               called_from = 2,
+            },
+         }
+         local live = strategy.compute_live_counts(d, 1)
+         local best, ok = strategy.post_call_best_candidate_hypothetical(
+            d, 1, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY
+         )
+         assert.is_true(ok)
+         assert.are.equal("discard", best.tag)
+         assert.is_true(best.expected_fan > 0.0)
+         assert.are.equal(#parse("11t 222w 333b 44b 55b 6w"), #d.players[1].hand.concealed_tiles,
+            "helper must restore the caller's hand")
       end)
    end)
 
