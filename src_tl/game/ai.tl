@@ -415,6 +415,9 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       -- their concealed-path optionality without converging on anything.
 
       -- Open Kong: 3 in hand + 1 from discard. Set absorbs all 3 matching tiles.
+      -- After kong, concealed = 10 tiles (= K=1 ting hand size). Use plain
+      -- standard ting (no post-call adjustment needed); the algorithm models
+      -- "needs 1 added tile" naturally via the supplement draw.
       if calls_mod.can_open_kong(discarded, concealed, discarder, player_index) then
          local rest = tiles_without_kind(concealed, discarded.kind_id, 3)
          local sets_after = {} as {TileSet}
@@ -425,9 +428,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             tiles       = { discarded, discarded, discarded, discarded },
             called_from = discarder,
          }
-         local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before
-            and strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+         local after = td.ting_distance_standard_live(rest, sets_after, live)
+         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
             return engine.declare_open_kong(player_index, discarded.tile_id), mk_reasoning(
                "open_kong", "open kong " .. (discarded.kind_id as string),
                target as string, before, after, -1, est_fan
@@ -435,7 +437,9 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          end
       end
 
-      -- Peng: 2 in hand + 1 from discard. Strict gate.
+      -- Peng: 2 in hand + 1 from discard. After peng, concealed = 11 tiles
+      -- (1 over ting hand size). The player will discard 1 next; use
+      -- `post_call_ting` which accounts for that forced discard.
       if calls_mod.can_peng(discarded, concealed, discarder, player_index) then
          local rest = tiles_without_kind(concealed, discarded.kind_id, 2)
          local sets_after = {} as {TileSet}
@@ -446,9 +450,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             tiles       = { discarded, discarded, discarded },
             called_from = discarder,
          }
-         local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before
-            and strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+         local after = strategy.post_call_ting(rest, sets_after, live)
+         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
             return engine.declare_peng(player_index, discarded.tile_id), mk_reasoning(
                "peng", "peng " .. (discarded.kind_id as string),
                target as string, before, after, -1, est_fan
@@ -474,9 +477,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
                tiles       = {},
                called_from = discarder,
             }
-            local after = td.ting_distance_live(rest, sets_after, live)
-            if after <= before
-               and strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+            local after = strategy.post_call_ting(rest, sets_after, live)
+            if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
                return engine.declare_chi(player_index, discarded.tile_id, pair), mk_reasoning(
                   "chi", "chi " .. (discarded.kind_id as string),
                   target as string, before, after, -1, est_fan

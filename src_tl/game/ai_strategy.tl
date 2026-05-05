@@ -49,6 +49,7 @@ local record StrategyModule
    max_est_fan_hypothetical:          function(DealState, integer, {Tile}, {TileSet}): integer
    has_three_fan_target:              function(DealState, integer): boolean
    has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
+   post_call_ting:                    function({Tile}, {TileSet}, {string: integer}): integer
 end
 
 local M: StrategyModule = {} as StrategyModule
@@ -592,5 +593,34 @@ function M.has_three_fan_target_hypothetical(
    p.hand.sets            = saved_sets
    return v
 end
+
+-- Post-call ting: after a peng / chi / open kong the player has one extra
+-- concealed tile to discard before reaching standard ting hand size.
+-- `ting_distance_standard_live` requires every concealed tile to fit into
+-- a set or pair, so for an 11-tile post-peng concealed it returns INF for
+-- nearly every hand — wrongly treating the to-be-discarded tile as a
+-- structural failure.
+--
+-- This helper computes the minimum standard ting after dropping any one
+-- tile from `concealed`. That's the AI's best-case post-discard state
+-- and the apples-to-apples comparison against pre-call ting. Use this for
+-- peng / chi gates where the player will discard right after the call.
+function M.post_call_ting(
+   concealed: {Tile},
+   sets:      {TileSet},
+   live:      {string: integer}
+): integer
+   local best = 100
+   for i = 1, #concealed do
+      local without: {Tile} = {}
+      for j, t in ipairs(concealed) do
+         if j ~= i then without[#without + 1] = t end
+      end
+      local ting = td.ting_distance_standard_live(without, sets, live)
+      if ting < best then best = ting end
+   end
+   return best
+end
+
 
 return M
