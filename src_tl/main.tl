@@ -56,6 +56,7 @@ local function on_back_to_start()
 end
 
 function love.load()
+   love.window.setMode(1280, 800, { resizable = true })
    love.window.setTitle("facai " .. VERSION)
    scene_stack.set_deal_over_handler(on_deal_over)
    scene_stack.set_retry_handler(on_retry)
