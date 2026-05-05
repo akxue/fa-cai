@@ -227,3 +227,33 @@ Implications:
 - Tests that previously asserted on `d.known_wall_tile_ids` now assert on `d.players[player_index].known_wall_tile_ids`.
 - Inspector still shows known wall size; in M1 only `players[1].known_wall_tile_ids` is non-empty.
 - Future "shared known wall" effects, if they ever exist, would need to populate every owning player's list explicitly — there is no shared bucket to fall back on.
+
+## D010: Rebuild AI As A Candidate-Record Pipeline (Post-S06)
+
+Status: accepted
+
+Context:
+- S06 shipped a working target-pattern heuristic (`target_fitness`, `discard_priority`, `SEQUENCE_VALUE` / `TRIPLET_VALUE` tables, `choose_target` lexicographic chain, `has_three_fan_target` gate). Final empirical state: Hu 6/10 on the standard 10-seed sweep, 195 tests passing.
+- The S06 implementation accumulated patches (Fix A: open sets credited as triplets; Fix B: target feasibility gates; target-aware discards via `discard_priority`; the `post_call_ting` math fix; the chi-simulation tile-population fix). Each fix individually closes a real hole. Together they reveal that the underlying mechanism is a stack of magic numbers that should be derived, not declared.
+- A four-agent mahjong-expert audit on seed 42 (one agent per seat, briefed on HK rules) surfaced systematic gaps the current architecture can't naturally express: visible depletion of needed tiles, fan-grounded probability of completion, post-call best-candidate evaluation, honor-singleton tiebreak by live count, target re-evaluation under board pressure. See `docs/playtest-logs/s06-ai-state.md`.
+- Cross-project research (`docs/AI-RESEARCH-NOTES.md`) finds the same shape across mature mahjong AIs (tenhou-python-bot, Aleo, AlphaJong, Mortal): a candidate-record pipeline carrying structured metrics (target distribution, ting, ukeire, expected fan, visible depletion, danger), filtered by legality, ranked by personality-weighted utility. Every research learning we surveyed plugs into this pipeline at a known place; the current code can't absorb them without more ad-hoc plumbing.
+
+Decision:
+- Open `S07: AI Candidate Pipeline` as the next AI slice. Rebuild the heuristic kernel — `pick_best_discard`, the call gates' bodies, `target_fitness`, `discard_priority`, the magic-number tile-value tables, `choose_target`'s explicit branching, `has_three_fan_target` — as a single candidate-record pipeline.
+- Keep all engine-facing helpers unchanged: `evaluate_hu`, `compute_live_counts`, `count_realized_modifiers`, `effect_runner.apply_score_modifiers`, the `ting_distance` family, `post_call_ting`, the chi-simulation tile-population fix.
+- Land a checked-in playtest harness (`scripts/playtest.lua` + `make playtest`) as the slice's first commit so every subsequent change is measured against the S06 baseline (Hu 6/10) instead of vibes-tuned.
+- Sequence: harness first (behavior-neutral); then candidate-record scaffold (behavior-neutral, ranking unchanged); then real probability-weighted `expected_fan` with visible-depletion penalty; then post-call-best-candidate gating; then kong replacement-draw expectation and personality-field plumbing.
+- Defer threat-triggered defense, opponent target inference, MCTS / search, ML, and additional hand-pattern targets like Qi Dui to later slices.
+
+Reason:
+- The candidate-pipeline shape is the consensus across mature mahjong AI projects, irrespective of ruleset (HK / Japanese / Chinese Standard / Mahjong Soul). Bolting more patches onto the current heuristic loses access to that shape's compounding leverage; rebuilding around it lets every future improvement (defense, opponent packages, search, ML) land as a localized change to one box of the pipeline.
+- Adding rare hand patterns (Qi Dui) treats symptoms; restructuring the priority list mechanism is the root fix. The user's post-audit pushback explicitly argued this point.
+- Rebuilding *now* — before S08 (Playable Round 1 UI) — gives the UI's inspector a stable AI surface to render top-3 candidates against, instead of layering inspector code over a heuristic whose internal shape will change.
+- A checked-in harness with the S06 baseline (Hu 6/10) makes the rebuild reversible at every step. Intermediate commits may dip below baseline; nothing merges to main until the slice tip matches or exceeds it.
+
+Implications:
+- The S07 slice plan reuses everything S06 built that's engine-facing. The throw-away is concentrated in `ai_strategy.tl`'s heuristic kernel (~400 lines of Teal); the infrastructure under it (~2000+ lines) carries forward.
+- About half the existing `spec_tl/ai_strategy_spec.tl` and `spec_tl/ai_spec.tl` cases will be rewritten — they pin assertions against the old API (e.g., "given hand X with target T, discard Y"). The new cases assert against the candidate API ("given hand X, candidate Y outranks Z because"). Same coverage, less locked into one mechanism.
+- `AiPersonality` gains `speed_bias`, `value_bias`, `call_appetite`, `kong_appetite`, `target_stickiness`, `safety_bias` fields plumbed through `rank_by_utility` in S07. M1 ships only `NEUTRAL_PERSONALITY`; opponent packages in later milestones become weight tweaks rather than new code paths.
+- The `danger` field is reserved on `CandidateAction` from S07 onward but populated as 0. Defense lands later; the field stays plumbed so downstream code is stable.
+- Future ML / search work uses the `CandidateAction` schema as its observation/action surface. We don't design it specifically for ML; we design it for the inspector and harness, and ML reuses it.
