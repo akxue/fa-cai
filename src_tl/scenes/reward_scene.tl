@@ -10,10 +10,6 @@ require("app.scene_stack")
 local scene_stack   = require("app.scene_stack")
 local clickable_mod = require("ui.clickable")
 local button        = require("ui.button")
--- The "continue" transition goes through scene_stack.fire_back_to_start
--- so this scene does not statically import start_scene (which would
--- create a cycle with boon_select_scene → table_scene → reward_scene).
--- main.tl owns the concrete transition.
 
 local record RewardState
    score_result: ScoreResult

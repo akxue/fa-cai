@@ -1,13 +1,8 @@
--- S05 debug table scene. Spectator-mode rendering of a deal driven by the
--- vanilla AI for all four seats, with step mode, AI pacing, an inspector
--- overlay, and a tile-conservation check after each engine transition.
---
--- Controls:
---   F1   toggle inspector overlay
---   T    toggle step mode (auto-advance vs single-step)
---   S    advance one AI action (when step mode is on)
---   R    restart the deal with the same seed
---   ESC  quit
+-- The deal table scene. Two modes share this rendering:
+--   "run"   — seat 1 is the human player; click-driven UI.
+--   "debug" — all four seats AI-driven; step/auto pacing, inspector
+--             overlay, and a tile-conservation check after each
+--             engine transition (F1 / T / S / R / ESC).
 
 require("core.types")
 require("core.rng")
@@ -40,7 +35,7 @@ local M = {}
 
 local AI_PACE_AUTO    <const> = 0.20    -- seconds between AI actions in auto mode
 local DEFAULT_SEED    <const> = 42
-local DEBUG_ROUND     <const> = 3       -- exercises Momentum surplus in S05.
+local DEBUG_ROUND     <const> = 3       -- exercises Momentum opening surplus.
 local LOG_MAX         <const> = 100
 local LOG_VISIBLE     <const> = 22
 
@@ -64,12 +59,7 @@ end
 local record SceneState
    seed:             integer
    deal:             DealState
-   -- "debug": all four seats AI-driven, all hands revealed by default.
-   -- "run":   seat 1 (East) is the human; opponents stay face-down unless
-   --          the inspector is toggled on. The AI driver still runs all
-   --          seats in commit 3; commit 4 swaps the seat-1 driver for
-   --          player input.
-   mode:             string
+   mode:             string    -- "debug" | "run"
    step_mode:        boolean
    wait_for_step:    boolean
    ai_pace_left:     number
@@ -79,20 +69,11 @@ local record SceneState
    conservation_msg: string
    ticks:            integer
    selected_opening_tile_ids: {TileId}
-   -- Most recent AI reasoning per seat (1..4). Populated by advance_one_action
-   -- so the inspector can render the seat's top-K candidate alternatives.
    last_reason_by_seat: {integer: AiReasoning}
-   -- Tile id of the cursor in the player's hand row (run mode). Empty
-   -- string when there is no current selection; ensure_cursor_valid()
-   -- defaults it to the last drawn tile.
    cursor_tile_id: TileId
-   -- Run-state reference so table_scene can decrement lives and route
-   -- to reward/result scenes when the deal ends.
    run_state: RunState
    clickables: {Clickable}
-   -- Cached prompt options: rebuilt on engine transitions (ticks change)
-   -- and, for "self" options, on cursor changes. Avoids rerunning
-   -- find_win_shapes + scorer + boon modifiers 3-5x per frame.
+   -- Tick-keyed cache for compute_seat1_*_options. See options_cached.
    cached_opts_tick:   integer
    cached_opts_kind:   string    -- "" | "reaction" | "self"
    cached_opts_cursor: TileId
@@ -120,8 +101,8 @@ end
 local function make_debug_run(seed: integer): RunState
    local rs = run_state.new_run(rng_mod.from_seed(seed))
    rs.round_index = DEBUG_ROUND
-   -- Use a compact debug boon set so opening_actions, Known Wall, active effect
-   -- counters, and surplus trimming are all visible before S06's real run flow.
+   -- Compact set that exercises opening_actions, Known Wall reveals,
+   -- active-effect counters, and surplus trimming.
    rs.active_effects = {
       content.activate_for("fresh_start", 1),
       content.activate_for("third_eye", 1),
@@ -130,14 +111,12 @@ local function make_debug_run(seed: integer): RunState
    return rs
 end
 
--- Pending entry passed in by an upstream scene (boon select). When set,
--- the next reset() consumes it instead of building a debug RunState.
+-- Set by an upstream scene (boon_select) and consumed by the next
+-- reset(). When unset, reset() builds a debug RunState instead.
 local pending_run: RunState = nil
 local pending_seed: integer = 0
 local has_pending: boolean = false
 
--- Public entry: call before pushing the table scene to begin a real run
--- with the given RunState and seed. Cleared after consumption.
 function M.start_run(rs: RunState, seed: integer)
    pending_run = rs
    pending_seed = seed
@@ -331,9 +310,7 @@ local function seat1_can_react(d: DealState): boolean
    return true
 end
 
--- Forward declaration so has_seat1_pending_input can ask the option
--- enumerator whether seat 1 has any reaction beyond Pass; the body is
--- defined later in the file.
+-- Forward decls; bodies below.
 local compute_seat1_reaction_options: function(d: DealState): {ActionPromptOption}
 local options_cached:                 function(d: DealState, kind: string): {ActionPromptOption}
 
@@ -419,8 +396,6 @@ local function jump_cursor(slot: integer)
    state.cursor_tile_id = hand[idxs[slot]].tile_id
 end
 
--- Reaction window options for seat 1: Hu/Peng/OpenKong/Chi/Pass.
--- Body for the forward-declared compute_seat1_reaction_options above.
 function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
    local opts: {ActionPromptOption} = {}
    local p = d.players[1]
@@ -662,17 +637,12 @@ end
 function M.update(dt: number)
    if state.deal == nil then return end
    if (state.deal.phase as string) == "deal_over" then
-      -- Hand off to reward/result via main.tl's deal_over handler.
-      -- The handler synchronously replaces this scene, so subsequent
-      -- update ticks won't reach here.
       if state.mode == "run" then
          scene_stack.fire_deal_over(state.deal, state.run_state)
       end
       return
    end
    if state.step_mode and state.wait_for_step then return end
-   -- In run mode, hand control to the player when seat 1 owes the next
-   -- decision. Drawing (awaiting_draw) is automatic and stays AI-driven.
    if has_seat1_pending_input(state.deal) then
       ensure_cursor_valid()
       return
@@ -1299,10 +1269,8 @@ local function draw_inspector(x: number, y: number, w: number, h: number)
       end
    end
 
-   -- AI candidate top-K per seat (S07 candidate-pipeline scaffold). Only the
-   -- discard path produces rich top-3 alternatives in commit 2; calls show a
-   -- single chosen candidate. Later commits expand this as more gates move
-   -- into the candidate pipeline.
+   -- AI candidate top-K per seat. Discard path produces rich top-3
+   -- alternatives; call paths show a single chosen candidate.
    ty = ty + 6
    draw_text("AI candidates (last decision):", tx, ty); ty = ty + 16
    for seat = 1, 4 do

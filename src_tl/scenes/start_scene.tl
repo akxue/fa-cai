@@ -1,6 +1,5 @@
--- Start scene. Title screen with three options: begin a fresh run, jump
--- into the S05 debug table for development, or quit. The menu items are
--- clickable; keyboard fallback (up/down/j/k + enter/space) still works.
+-- Start scene. Title screen with three options: begin a fresh run,
+-- jump into the debug table for development, or quit.
 
 require("app.scene_stack")
 

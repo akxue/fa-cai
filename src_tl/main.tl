@@ -1,11 +1,6 @@
--- LÖVE entry point. Pushes the start scene; all callbacks are routed
--- through the scene stack so future scenes (boon select, reward, result)
--- compose without changes here.
---
--- main.tl is also the only module that statically imports every scene.
--- Cross-scene transitions (deal_over → reward/result, retry → table,
--- back_to_start) are installed as scene_stack handlers below so the
--- scenes themselves stay decoupled.
+-- LÖVE entry point. Owns the only static import of every scene; cross-
+-- scene transitions are installed as scene_stack handlers (see
+-- scene_stack.tl for the cycle-avoidance rationale).
 
 require("game.deal_types")
 require("game.run_state")

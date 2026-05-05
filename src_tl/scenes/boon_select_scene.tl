@@ -1,14 +1,7 @@
--- Boon select scene. Presents 3 curated starter boon offers to the player;
--- the chosen boon is activated for player 1 (East / human seat) and the
--- resulting RunState is handed to the table scene, which is then pushed.
--- Offers are clickable; keyboard fallback (up/down/j/k + enter) still works.
---
--- The 3 offers are intentionally hand-picked to span the M1 archetypes:
---   - Fresh Start  (Reader, opening interaction)
---   - Third Eye    (Reader, passive Known Wall)
---   - Dragon's Weight (Caller, scoring boost)
--- This list is the "curated" pool S08 ships; future slices may rotate or
--- randomize from the broader content.boons.starter() set.
+-- Boon select scene. Three offers spanning the archetypes — Fresh
+-- Start (opening interaction), Third Eye (passive Known Wall),
+-- Dragon's Weight (scoring boost) — picked so the player feels a
+-- visible difference depending on their choice.
 
 require("core.types")
 require("core.rng")

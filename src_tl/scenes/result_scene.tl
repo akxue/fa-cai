@@ -13,9 +13,6 @@ require("app.scene_stack")
 local scene_stack   = require("app.scene_stack")
 local clickable_mod = require("ui.clickable")
 local button        = require("ui.button")
--- Transitions go through scene_stack.fire_retry / fire_back_to_start so
--- this scene avoids statically importing start_scene or table_scene.
--- main.tl owns those concrete transitions.
 
 local record ResultState
    run_state:     RunState
