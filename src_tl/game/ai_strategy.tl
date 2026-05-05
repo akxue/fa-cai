@@ -1,0 +1,492 @@
+-- AI strategy: target-pattern picker + projected-fan estimator. Pure rules
+-- layer; no love/ui/scenes/app imports.
+--
+-- The strategy module supplies three things to ai.tl:
+--   * choose_target — picks one of {default, dui_dui_hu, hun_yi_se, qing_yi_se}
+--     based on hand features and a personality bias.
+--   * estimate_fan_for_target — fan ceiling for a given target *before* ting.
+--     This is the boon-aware filter: routes a synthetic ScoreResult through
+--     `effect_runner.apply_score_modifiers` so AI-owned boons contribute.
+--   * pick_best_discard — target-aware discard heuristic with ukeire tiebreak.
+--
+-- Personality is the extension point. Vanilla AI passes NEUTRAL_PERSONALITY.
+-- Opponent packages and AI-owned-boon modes plug in via this same record.
+
+require("core.types")
+require("game.deal_types")
+local td        = require("game.ting_distance")
+local fx_runner = require("effects.effect_runner")
+
+global type TargetKind = string
+-- "default" | "dui_dui_hu" | "hun_yi_se" | "qing_yi_se"
+
+global record AiPersonality
+   target_weights:   {string: number}   -- per-target multiplier; default 1.0
+   call_appetite:    number             -- 0..1; how aggressively to call
+end
+
+global record HandFeatures
+   honor_count:      integer   -- total honor tiles
+   honor_pairs:      integer   -- distinct honor kinds with ≥2 copies
+   max_suit:         string    -- dominant suit ("tiao" | "wan" | "bing" | "")
+   max_suit_count:   integer   -- count of tiles in max_suit
+   off_suit_count:   integer   -- non-honor tiles outside max_suit
+   pair_count:       integer   -- distinct kinds with ≥2 copies
+   triplet_count:    integer   -- distinct kinds with ≥3 copies
+   open_set_count:   integer
+   has_open_set:     boolean
+end
+
+local record StrategyModule
+   NEUTRAL_PERSONALITY: AiPersonality
+   compute_features:                  function({Tile}, {TileSet}): HandFeatures
+   tile_value:                        function(TileKindId, TargetKind, Wind, Wind): number
+   estimate_fan_for_target:           function(DealState, integer, TargetKind): integer
+   choose_target:                     function(DealState, integer, AiPersonality): (TargetKind, integer)
+   compute_ukeire:                    function(DealState, integer, {string: integer}): integer
+   pick_best_discard:                 function(DealState, integer, AiPersonality, TargetKind, {string: integer}): (TileId, integer, integer, integer)
+   has_three_fan_target:              function(DealState, integer): boolean
+   has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
+end
+
+local M: StrategyModule = {} as StrategyModule
+
+M.NEUTRAL_PERSONALITY = {
+   target_weights = {
+      default     = 1.0,
+      dui_dui_hu  = 1.0,
+      hun_yi_se   = 1.0,
+      qing_yi_se  = 1.0,
+   },
+   call_appetite = 0.5,
+}
+
+-- ── Constants ─────────────────────────────────────────────────────────────
+
+local HONOR_KINDS: {string: boolean} = {
+   east = true, south = true, west = true, north = true,
+   fa_cai = true, hong_zhong = true, bai_ban = true,
+}
+
+-- ── Tile-value tables (tiebreakers when ting and ukeire tie) ──────────────
+
+-- sequence_value: prefers middle suited tiles for chi-building.
+-- terminal=1, edge(2,8)=2, near(3,7)=3, mid(4,5,6)=4, honors=0
+local SEQUENCE_VALUE: {string: number} = {
+   tiao_1 = 1, tiao_9 = 1, wan_1 = 1, wan_9 = 1, bing_1 = 1, bing_9 = 1,
+   tiao_2 = 2, tiao_8 = 2, wan_2 = 2, wan_8 = 2, bing_2 = 2, bing_8 = 2,
+   tiao_3 = 3, tiao_7 = 3, wan_3 = 3, wan_7 = 3, bing_3 = 3, bing_7 = 3,
+   tiao_4 = 4, tiao_5 = 4, tiao_6 = 4,
+   wan_4 = 4, wan_5 = 4, wan_6 = 4,
+   bing_4 = 4, bing_5 = 4, bing_6 = 4,
+   east = 0, south = 0, west = 0, north = 0,
+   fa_cai = 0, hong_zhong = 0, bai_ban = 0,
+}
+
+-- triplet_value: prefers honors and dragons for peng-building.
+-- non-yakuhai-honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4 (computed)
+local TRIPLET_VALUE: {string: number} = {
+   tiao_1 = 2, tiao_9 = 2, wan_1 = 2, wan_9 = 2, bing_1 = 2, bing_9 = 2,
+   tiao_2 = 3, tiao_3 = 3, tiao_4 = 3, tiao_5 = 3, tiao_6 = 3, tiao_7 = 3, tiao_8 = 3,
+   wan_2 = 3, wan_3 = 3, wan_4 = 3, wan_5 = 3, wan_6 = 3, wan_7 = 3, wan_8 = 3,
+   bing_2 = 3, bing_3 = 3, bing_4 = 3, bing_5 = 3, bing_6 = 3, bing_7 = 3, bing_8 = 3,
+   east = 1, south = 1, west = 1, north = 1,
+   fa_cai = 4, hong_zhong = 4, bai_ban = 4,
+}
+
+-- Tile-value lookup for a target. Sequence-leaning targets use SEQUENCE_VALUE;
+-- triplet-leaning use TRIPLET_VALUE. seat/round wind get +1 in triplet table.
+function M.tile_value(kind_id: TileKindId, target: TargetKind, seat_wind: Wind, round_wind: Wind): number
+   local key = kind_id as string
+   if (target as string) == "dui_dui_hu" then
+      local v = TRIPLET_VALUE[key] or 0
+      if key == (seat_wind as string) or key == (round_wind as string) then
+         v = v + 1
+      end
+      return v
+   end
+   return SEQUENCE_VALUE[key] or 0
+end
+
+-- ── Composition features ───────────────────────────────────────────────────
+
+local function suit_of(kind_id: string): string
+   if HONOR_KINDS[kind_id] then return "" end
+   local suit = kind_id:match("^([a-z]+)_%d+$")
+   return suit or ""
+end
+
+function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
+   local counts: {string: integer} = {}
+   for _, t in ipairs(concealed) do
+      local k = t.kind_id as string
+      counts[k] = (counts[k] or 0) + 1
+   end
+
+   local honor_count = 0
+   local honor_pairs = 0
+   local pair_count  = 0
+   local triplet_count = 0
+   local suit_counts: {string: integer} = { tiao = 0, wan = 0, bing = 0 }
+
+   for k, n in pairs(counts) do
+      if HONOR_KINDS[k] then
+         honor_count = honor_count + n
+         if n >= 2 then honor_pairs = honor_pairs + 1 end
+      else
+         local s = suit_of(k)
+         if s ~= "" then suit_counts[s] = (suit_counts[s] or 0) + n end
+      end
+      if n >= 2 then pair_count = pair_count + 1 end
+      if n >= 3 then triplet_count = triplet_count + 1 end
+   end
+
+   local max_suit = ""
+   local max_suit_count = 0
+   for s, n in pairs(suit_counts) do
+      if n > max_suit_count then
+         max_suit = s
+         max_suit_count = n
+      end
+   end
+
+   local off_suit = 0
+   for s, n in pairs(suit_counts) do
+      if s ~= max_suit then off_suit = off_suit + n end
+   end
+
+   -- Add tiles in declared open sets to the suit counts so target selection
+   -- accounts for committed structure.
+   local open_set_count = #sets
+   local has_open = false
+   for _, sset in ipairs(sets) do
+      if (sset.visibility as string) == "open" then has_open = true end
+      for _, t in ipairs(sset.tiles) do
+         local k = t.kind_id as string
+         if HONOR_KINDS[k] then
+            honor_count = honor_count + 1
+         elseif suit_of(k) == max_suit then
+            max_suit_count = max_suit_count + 1
+         else
+            off_suit = off_suit + 1
+         end
+      end
+   end
+
+   return {
+      honor_count    = honor_count,
+      honor_pairs    = honor_pairs,
+      max_suit       = max_suit,
+      max_suit_count = max_suit_count,
+      off_suit_count = off_suit,
+      pair_count     = pair_count,
+      triplet_count  = triplet_count,
+      open_set_count = open_set_count,
+      has_open_set   = has_open,
+   }
+end
+
+-- ── Synthetic-shape construction for boon-aware fan estimation ────────────
+
+-- Builds a placeholder WinShape for a target. Used to feed
+-- `effect_runner.apply_score_modifiers` so AI-owned boons contribute even
+-- before the hand reaches ting. Approximate: real Hu fan is recomputed at
+-- ting via evaluate_hu in ai.tl.
+local function synthetic_shape(_target: TargetKind, sets: {TileSet}, pair_kind: TileKindId): WinShape
+   local out_sets: {TileSet} = {}
+   for _, s in ipairs(sets) do out_sets[#out_sets + 1] = s end
+   -- Pad with placeholder concealed sets (no tiles). Boon modules read
+   -- shape.sets for things like dragon-pung counts; empty placeholders mean
+   -- no contribution from those modules, which is the correct conservative
+   -- behavior for an estimate.
+   while #out_sets < 4 do
+      out_sets[#out_sets + 1] = {
+         kind        = "peng" as TileSetKind,
+         visibility  = "concealed" as SetVisibility,
+         tiles       = {},
+         called_from = -1,
+      }
+   end
+   return {
+      kind      = "standard_four_sets_pair" as WinShapeKind,
+      sets      = out_sets,
+      pair_kind = pair_kind,
+   }
+end
+
+-- Returns a baseline fan number for the target's hand pattern alone.
+local function target_base_fan(target: TargetKind): integer
+   local t = target as string
+   if t == "dui_dui_hu" then return 3
+   elseif t == "hun_yi_se" then return 3
+   elseif t == "qing_yi_se" then return 6
+   else return 1   -- default → Ping Hu base
+   end
+end
+
+-- Fan ceiling for `target` from the current hand state. Routes through the
+-- effect runner so AI-owned boons contribute. Used as the pre-ting filter:
+-- targets with est_fan < 3 are treated as unreachable.
+function M.estimate_fan_for_target(deal: DealState, player_index: integer, target: TargetKind): integer
+   local p = deal.players[player_index]
+   local base_fan = target_base_fan(target)
+
+   local is_men_qian = true
+   for _, s in ipairs(p.hand.sets) do
+      if (s.visibility as string) == "open" then is_men_qian = false; break end
+   end
+   if is_men_qian then base_fan = base_fan + 1 end   -- men qian +1
+
+   -- Pick a pair kind from concealed (first kind with ≥2 copies) for the
+   -- synthetic shape; falls back to first concealed tile.
+   local pair_kind: TileKindId = "" as TileKindId
+   if #p.hand.concealed_tiles > 0 then
+      pair_kind = p.hand.concealed_tiles[1].kind_id
+   end
+   local counts: {string: integer} = {}
+   for _, t in ipairs(p.hand.concealed_tiles) do
+      local k = t.kind_id as string
+      counts[k] = (counts[k] or 0) + 1
+   end
+   for k, n in pairs(counts) do
+      if n >= 2 then pair_kind = k as TileKindId; break end
+   end
+
+   local shape = synthetic_shape(target, p.hand.sets, pair_kind)
+
+   local incoming: Tile = { tile_id = "" as TileId, kind_id = pair_kind }
+   local ctx: ScoreContext = {
+      incoming_tile = incoming,
+      has_incoming  = true,
+      is_zi_mo      = false,
+      is_men_qian   = is_men_qian,
+      is_hai_di     = false,
+      is_gang_shang = false,
+      is_qiang_gang = false,
+      round_wind    = deal.round_wind,
+      seat_wind     = p.seat_wind,
+   }
+
+   local base_reasons: {ScoreReason} = {
+      {
+         category = "hand_pattern" as ScoreReasonCategory,
+         label    = (target as string),
+         fan      = target_base_fan(target),
+         is_limit = false,
+      },
+   }
+   if is_men_qian then
+      base_reasons[#base_reasons + 1] = {
+         category = "modifier" as ScoreReasonCategory,
+         label    = "men_qian",
+         fan      = 1,
+         is_limit = false,
+      }
+   end
+
+   local synthetic_base: ScoreResult = {
+      win_shape_kind = shape.kind,
+      reasons        = base_reasons,
+      total_fan      = base_fan,
+      is_limit       = false,
+      rating         = "C" as Rating,
+      valid_hu       = base_fan >= 3,
+   }
+
+   local final = fx_runner.apply_score_modifiers(deal, ctx, shape, synthetic_base, player_index)
+   if final.is_limit then return 100 end
+   return final.total_fan
+end
+
+-- ── Target selection ──────────────────────────────────────────────────────
+
+-- Computes a per-target fitness score from features. Higher = better fit.
+local function target_fitness(target: TargetKind, f: HandFeatures): number
+   local t = target as string
+   if t == "dui_dui_hu" then
+      -- Fits when many pairs, few sequences. Each pair = 1 step toward 4 triplets.
+      return (f.pair_count * 2.0) + (f.triplet_count * 3.0) + (f.honor_pairs * 1.0)
+   elseif t == "qing_yi_se" then
+      -- Fits when one suit dominates and no honors.
+      return (f.max_suit_count * 1.0) - (f.off_suit_count * 0.5) - (f.honor_count * 1.0)
+   elseif t == "hun_yi_se" then
+      -- Fits when one suit dominates and honors are present.
+      return (f.max_suit_count * 1.0) + (f.honor_count * 0.8) - (f.off_suit_count * 0.5)
+   else   -- default
+      -- Universally feasible; modest baseline so it wins by default when
+      -- no shape strongly fits.
+      return 6.0
+   end
+end
+
+local TARGETS: {TargetKind} = {
+   "default" as TargetKind, "dui_dui_hu" as TargetKind,
+   "hun_yi_se" as TargetKind, "qing_yi_se" as TargetKind,
+}
+
+-- Picks a target: highest (fitness * weight) among those with est_fan ≥ 3.
+-- Falls through to "default" if every other target fails the fan filter.
+function M.choose_target(deal: DealState, player_index: integer, personality: AiPersonality): TargetKind, integer
+   local p = deal.players[player_index]
+   local f = M.compute_features(p.hand.concealed_tiles, p.hand.sets)
+
+   local best: TargetKind = "default" as TargetKind
+   local best_score = -1.0e9
+   local best_est_fan = 0
+
+   for _, t in ipairs(TARGETS) do
+      local est_fan = M.estimate_fan_for_target(deal, player_index, t)
+      if est_fan >= 3 or (t as string) == "default" then
+         local fit = target_fitness(t, f)
+         local weight = personality.target_weights[t as string] or 1.0
+         local score = fit * weight
+         if score > best_score then
+            best = t
+            best_score = score
+            best_est_fan = est_fan
+         end
+      end
+   end
+   return best, best_est_fan
+end
+
+-- ── Ukeire ────────────────────────────────────────────────────────────────
+
+-- Counts the number of distinct kinds whose addition would improve ting
+-- distance, weighted by remaining live copies.
+function M.compute_ukeire(deal: DealState, player_index: integer, live: {string: integer}): integer
+   local p = deal.players[player_index]
+   local concealed = p.hand.concealed_tiles
+   local sets = p.hand.sets
+   local current = td.ting_distance_live(concealed, sets, live)
+   if current >= 100 then return 0 end
+
+   local total = 0
+   for kind, n_live in pairs(live) do
+      if n_live > 0 then
+         local hypothetical: {Tile} = {}
+         for _, t in ipairs(concealed) do hypothetical[#hypothetical + 1] = t end
+         hypothetical[#hypothetical + 1] = {
+            tile_id = ("__probe_" .. kind) as TileId,
+            kind_id = kind as TileKindId,
+         }
+         -- After adding one more tile, we'd have to discard something to keep
+         -- the same total. The cheapest interpretation: ting on the current
+         -- 13-tile hand if `kind` is the one tile that completes a 4+pair
+         -- decomposition. For an estimate, we count kinds whose addition
+         -- *strictly improves* ting on the (concealed+1) set.
+         local new_ting = td.ting_distance_live(hypothetical, sets, live)
+         if new_ting < current then
+            total = total + n_live
+         end
+      end
+   end
+   return total
+end
+
+-- ── Discard heuristic ─────────────────────────────────────────────────────
+
+local function tiles_without_id(tiles: {Tile}, tile_id: TileId): {Tile}
+   local out: {Tile} = {}
+   for _, t in ipairs(tiles) do
+      if t.tile_id ~= tile_id then out[#out + 1] = t end
+   end
+   return out
+end
+
+-- Rank candidate discards by:
+--   1. live ting after discard (asc).
+--   2. tile-value of the discarded tile under the chosen target (asc — prefer
+--      to drop low-value tiles like terminals/honors for sequence targets).
+--   3. tile_id (asc) for determinism.
+--
+-- Ukeire is computed once for the *chosen* candidate (used in reasoning /
+-- inspector display), not per-candidate. Per-candidate ukeire is too
+-- expensive for a 30-kind × 14-candidate inner loop and rarely changes the
+-- ranking outcome that ting + tile-value already captures.
+--
+-- Returns: tile_id, ting_before, ting_after, ukeire_after.
+function M.pick_best_discard(
+   deal:         DealState,
+   player_index: integer,
+   _personality: AiPersonality,
+   target:       TargetKind,
+   live:         {string: integer}
+): TileId, integer, integer, integer
+   local p = deal.players[player_index]
+   local concealed = p.hand.concealed_tiles
+   local before = td.ting_distance_live(concealed, p.hand.sets, live)
+
+   local best_id: TileId = concealed[1].tile_id
+   local best_ting = 1000
+   local best_value = 1.0e9
+
+   for _, t in ipairs(concealed) do
+      local rest = tiles_without_id(concealed, t.tile_id)
+      local after_ting = td.ting_distance_live(rest, p.hand.sets, live)
+      local value = M.tile_value(t.kind_id, target, p.seat_wind, deal.round_wind)
+
+      local better = false
+      if after_ting < best_ting then
+         better = true
+      elseif after_ting == best_ting then
+         if value < best_value then
+            better = true
+         elseif value == best_value then
+            if (t.tile_id as string) < (best_id as string) then
+               better = true
+            end
+         end
+      end
+
+      if better then
+         best_id = t.tile_id
+         best_ting = after_ting
+         best_value = value
+      end
+   end
+
+   -- Compute ukeire on the chosen post-discard hand for reasoning display.
+   local rest = tiles_without_id(concealed, best_id)
+   local saved = p.hand.concealed_tiles
+   p.hand.concealed_tiles = rest
+   local best_uke = M.compute_ukeire(deal, player_index, live)
+   p.hand.concealed_tiles = saved
+
+   return best_id, before, best_ting, best_uke
+end
+
+-- ── Used by ai.tl to decide whether a call/kong leaves a 3-fan path open ──
+
+-- Returns true if the resulting hand can still reach a target with est_fan ≥ 3.
+-- Pure helper — does not mutate `deal`. For perf, callers can mutate a copy
+-- and call this directly.
+function M.has_three_fan_target(deal: DealState, player_index: integer): boolean
+   for _, t in ipairs(TARGETS) do
+      local est = M.estimate_fan_for_target(deal, player_index, t)
+      if est >= 3 then return true end
+   end
+   return false
+end
+
+-- Hypothetical variant: temporarily swaps the player's concealed_tiles and
+-- sets, runs has_three_fan_target, then restores. Used by ai.tl to test
+-- post-kong / post-call states without a full engine clone.
+function M.has_three_fan_target_hypothetical(
+   deal:                   DealState,
+   player_index:           integer,
+   hypothetical_concealed: {Tile},
+   hypothetical_sets:      {TileSet}
+): boolean
+   local p = deal.players[player_index]
+   local saved_concealed = p.hand.concealed_tiles
+   local saved_sets      = p.hand.sets
+   p.hand.concealed_tiles = hypothetical_concealed
+   p.hand.sets            = hypothetical_sets
+   local ok = M.has_three_fan_target(deal, player_index)
+   p.hand.concealed_tiles = saved_concealed
+   p.hand.sets            = saved_sets
+   return ok
+end
+
+return M

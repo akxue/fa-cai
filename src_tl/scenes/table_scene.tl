@@ -271,6 +271,16 @@ local function describe_reasoning(r: AiReasoning, seat: integer): string
       local a = r.ting_after  > -100 and tostring(r.ting_after)  or "-"
       body = body .. " (ting " .. b .. "→" .. a .. ")"
    end
+   if r.target ~= "" then
+      body = body .. " [" .. r.target
+      if r.est_fan >= 0 then
+         body = body .. " est=" .. tostring(r.est_fan) .. "f"
+      end
+      if r.ukeire >= 0 then
+         body = body .. " uke=" .. tostring(r.ukeire)
+      end
+      body = body .. "]"
+   end
    return body
 end
 

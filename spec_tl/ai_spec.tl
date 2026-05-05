@@ -168,16 +168,17 @@ describe("ai", function()
          assert.are.equal(min_after, reason.ting_after)
       end)
 
-      it("is deterministic on tie: picks the tile_id-smallest candidate", function()
-         -- Two equivalent junk tiles; tie-break by tile_id ascending.
+      it("is deterministic and prefers low tile-value candidates on tie", function()
+         -- Two equivalent ting-after candidates; the heuristic tiebreaks by
+         -- tile-value (terminal=1 < mid suited=4), so wan_9 (terminal) is
+         -- preferred for discard over bing_5 (mid suited).
          local hand = parse("111t 222w 333b 444b 5b 9w")
          local d = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
          local action_a = ai.decide_main(d, 1)
          local action_b = ai.decide_main(d, 1)
          assert.are.equal((action_a as DiscardAction).tile_id, (action_b as DiscardAction).tile_id)
-         -- "bing_5_a" < "wan_9_a", so 5b wins the tie.
-         assert.are.equal("bing_5_a", (action_a as DiscardAction).tile_id as string)
+         assert.are.equal("wan_9_a", (action_a as DiscardAction).tile_id as string)
       end)
 
       it("M1 vanilla AI ignores its own seat's known_wall_tile_ids", function()
