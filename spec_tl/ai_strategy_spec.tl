@@ -593,6 +593,81 @@ describe("ai_strategy", function()
       end)
    end)
 
+   describe("AiPersonality (T20)", function()
+      it("call_appetite scales call candidate utility relative to discards", function()
+         -- Two candidates with the same utility but different tags. Under
+         -- NEUTRAL_PERSONALITY (call_appetite=1.0), they tie and tag-asc
+         -- breaks the tie. Under aggressive (call_appetite=2.0), the
+         -- "peng" candidate's effective utility doubles → it ranks first.
+         local discard_cand: CandidateAction = {
+            action = { kind = "discard" } as DealAction,
+            tag = "discard",
+            target_distribution = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+            ting_after = 1, ukeire_after = 5, expected_fan = 2.0,
+            visible_depletion = 0.0, danger = 0.0, utility = 2.0,
+            accepted = true, rejection_reason = "",
+         }
+         local peng_cand: CandidateAction = {
+            action = { kind = "declare_peng" } as DealAction,
+            tag = "peng",
+            target_distribution = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+            ting_after = 1, ukeire_after = 5, expected_fan = 2.0,
+            visible_depletion = 0.0, danger = 0.0, utility = 2.0,
+            accepted = true, rejection_reason = "",
+         }
+
+         local neutral_ranked = strategy.rank_candidates(
+            { discard_cand, peng_cand }, strategy.NEUTRAL_PERSONALITY
+         )
+         -- "discard" < "peng" lexicographically → discard wins on tag-tie.
+         assert.are.equal("discard", neutral_ranked[1].tag)
+
+         local aggressive: AiPersonality = {
+            target_weights = { default = 1.0, dui_dui_hu = 1.0, hun_yi_se = 1.0, qing_yi_se = 1.0 },
+            call_appetite = 2.0, kong_appetite = 1.0,
+            speed_bias = 0.5, value_bias = 0.5,
+            target_stickiness = 0.0, safety_bias = 0.0,
+         }
+         local aggressive_ranked = strategy.rank_candidates(
+            { discard_cand, peng_cand }, aggressive
+         )
+         assert.are.equal("peng", aggressive_ranked[1].tag,
+            "with call_appetite=2.0 the peng candidate should rank above the equally-valued discard")
+      end)
+   end)
+
+   describe("kong_post_supplement_avg_fan (T19)", function()
+      it("returns a weighted average of post-supplement max feasible fan", function()
+         -- Hand: 222w 333b 44b 5b 6b 7b (10 tiles + 1 kong of tiao_1 in
+         -- sets). max_feasible_est_fan: dui_dui_hu (3 fan) is feasible;
+         -- qing_yi_se / hun_yi_se require committed-suit alignment which
+         -- the tiao kong breaks (committed=tiao but max_suit=bing). For
+         -- ANY supplement tile the fan ceiling stays at 3 (or rises if
+         -- the supplement creates a stronger structure).
+         local hand = parse("222w 333b 44b 5b 6b 7b")
+         local sets: {TileSet} = {
+            {
+               kind = "kong" as TileSetKind,
+               visibility = "concealed" as SetVisibility,
+               tiles = {
+                  { tile_id = "tiao_1_a" as TileId, kind_id = "tiao_1" as TileKindId },
+                  { tile_id = "tiao_1_b" as TileId, kind_id = "tiao_1" as TileKindId },
+                  { tile_id = "tiao_1_c" as TileId, kind_id = "tiao_1" as TileKindId },
+                  { tile_id = "tiao_1_d" as TileId, kind_id = "tiao_1" as TileKindId },
+               },
+               called_from = -1,
+            },
+         }
+         local d = make_deal(hand, sets)
+         local live = strategy.compute_live_counts(d, 1)
+         local avg = strategy.kong_post_supplement_avg_fan(d, 1, hand, sets, live)
+         -- dui_dui_hu (3 fan) is feasible across all supplement kinds, so
+         -- the average should be ≥ 3. Higher fan paths can push it up.
+         assert.is_true(avg >= 3.0,
+            string.format("expected kong supplement avg ≥ 3.0, got %.3f", avg))
+      end)
+   end)
+
    describe("max_feasible_est_fan (T16)", function()
       it("returns 6 for a feasible qing_yi_se hand (single suit, no honors)", function()
          local d = make_deal(parse("123t 456t 789t 22t 99t"), {})

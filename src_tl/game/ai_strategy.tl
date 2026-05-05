@@ -21,9 +21,41 @@ local engine    = require("game.deal_engine")
 global type TargetKind = string
 -- "default" | "dui_dui_hu" | "hun_yi_se" | "qing_yi_se"
 
+-- Personality knobs (T20). Vanilla AI uses NEUTRAL_PERSONALITY (every
+-- field at its identity value). Opponent packages and AI-owned-boon modes
+-- plug into rank_by_utility / call gates through this record.
+--
+-- Fields:
+--   target_weights     — per-target multiplier on expected_fan
+--                        contributions; default 1.0. Lets a personality
+--                        bias toward dui_dui_hu vs qing_yi_se etc.
+--   call_appetite      — 0..1; multiplier applied to call candidates'
+--                        expected_fan in rank_by_utility. Higher = the
+--                        personality calls more readily.
+--   kong_appetite      — 0..1; same shape but for kong candidates only.
+--                        Separated from call_appetite so a personality
+--                        can be peng-happy and kong-shy or vice versa.
+--   speed_bias         — 0..1; weight on closeness-to-ting (lower ting
+--                        scores higher). Used as a tiebreak factor in
+--                        rank_by_utility when expected_fan ties.
+--   value_bias         — 0..1; weight on raw fan ceiling. Counter to
+--                        speed_bias; high value_bias prefers higher-fan
+--                        paths even when slower.
+--   target_stickiness  — 0..1; how much to bias toward the previously
+--                        chosen target. Prevents flip-flopping between
+--                        targets each turn. M1 vanilla = 0 (no
+--                        stickiness; pure expected-fan ranking).
+--   safety_bias        — 0..1; weight on the `danger` field of a
+--                        candidate. Reserved for future defense logic;
+--                        all M1 candidates have danger = 0.
 global record AiPersonality
-   target_weights:   {string: number}   -- per-target multiplier; default 1.0
-   call_appetite:    number             -- 0..1; how aggressively to call
+   target_weights:    {string: number}
+   call_appetite:     number
+   kong_appetite:     number
+   speed_bias:        number
+   value_bias:        number
+   target_stickiness: number
+   safety_bias:       number
 end
 
 -- ── CandidateAction (S07 candidate-pipeline) ────────────────────────────
@@ -104,10 +136,11 @@ local record StrategyModule
    has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
    max_feasible_est_fan:              function(DealState, integer): integer
    max_feasible_est_fan_hypothetical: function(DealState, integer, {Tile}, {TileSet}): integer
+   kong_post_supplement_avg_fan:      function(DealState, integer, {Tile}, {TileSet}, {string: integer}): number
    post_call_ting:                    function({Tile}, {TileSet}, {string: integer}): integer
    evaluate_discard_candidates:       function(DealState, integer, AiPersonality, TargetKind, {string: integer}): {CandidateAction}
    enrich_candidate:                  function(DealState, integer, TargetKind, {string: integer}, CandidateAction)
-   rank_candidates:                   function({CandidateAction}): {CandidateAction}
+   rank_candidates:                   function({CandidateAction}, AiPersonality): {CandidateAction}
    top_n_candidates:                  function({CandidateAction}, integer): {CandidateAction}
 end
 
@@ -120,7 +153,12 @@ M.NEUTRAL_PERSONALITY = {
       hun_yi_se   = 1.0,
       qing_yi_se  = 1.0,
    },
-   call_appetite = 0.5,
+   call_appetite     = 1.0,    -- identity multiplier
+   kong_appetite     = 1.0,
+   speed_bias        = 0.5,
+   value_bias        = 0.5,
+   target_stickiness = 0.0,    -- no stickiness: pure expected-fan ranking
+   safety_bias       = 0.0,    -- no defense in M1
 }
 
 -- ── Live-tile bookkeeping ─────────────────────────────────────────────────
@@ -831,17 +869,35 @@ function M.enrich_candidate(
    p.hand.concealed_tiles = saved
 end
 
--- Sorts candidates by utility descending. Tiebreak: ukeire desc (more
--- improving kinds), ting asc (closer to ting), tag asc, id asc — all
--- already encoded into utility's tiny id_index term so utility-only
--- ordering is sufficient when discards drove the comparison. Distinct
--- tags (discard vs call vs hu) typically do not share utility scales;
--- callers pick by tag priority before ranking utilities within a tag.
-function M.rank_candidates(cands: {CandidateAction}): {CandidateAction}
+-- Multiplier a personality applies to a candidate's utility based on its
+-- tag. Call / kong candidates get scaled by call_appetite / kong_appetite
+-- so opponent personalities can be made aggressive or conservative on
+-- calls without changing the underlying expected_fan. Defaults to 1.0
+-- (NEUTRAL_PERSONALITY) so M1 ranking is unchanged.
+local function personality_tag_weight(tag: string, personality: AiPersonality): number
+   if tag == "concealed_kong" or tag == "open_kong" or tag == "added_kong" then
+      return personality.kong_appetite
+   elseif tag == "peng" or tag == "chi" then
+      return personality.call_appetite
+   end
+   return 1.0
+end
+
+-- Sorts candidates by personality-adjusted utility descending. Tiebreak:
+-- ukeire desc (more improving kinds), ting asc, tag asc.
+--
+-- The personality knob applied here is call/kong appetite. Other knobs
+-- (speed_bias, value_bias, target_stickiness, safety_bias) are reserved
+-- for downstream slices when defense / target-stickiness behaviors land;
+-- the fields are plumbed through the API so the rank function's signature
+-- stays stable as those features land.
+function M.rank_candidates(cands: {CandidateAction}, personality: AiPersonality): {CandidateAction}
    local out: {CandidateAction} = {}
    for _, c in ipairs(cands) do out[#out + 1] = c end
    table.sort(out, function(a: CandidateAction, b: CandidateAction): boolean
-      if a.utility ~= b.utility then return a.utility > b.utility end
+      local au = a.utility * personality_tag_weight(a.tag, personality)
+      local bu = b.utility * personality_tag_weight(b.tag, personality)
+      if au ~= bu then return au > bu end
       if a.ukeire_after ~= b.ukeire_after then return a.ukeire_after > b.ukeire_after end
       if a.ting_after ~= b.ting_after then return a.ting_after < b.ting_after end
       if a.tag ~= b.tag then return a.tag < b.tag end
@@ -871,7 +927,7 @@ function M.pick_best_discard(
    local p = deal.players[player_index]
    local before = td.ting_distance_live(p.hand.concealed_tiles, p.hand.sets, live)
    local cands = M.evaluate_discard_candidates(deal, player_index, personality, target, live)
-   local ranked = M.rank_candidates(cands)
+   local ranked = M.rank_candidates(cands, personality)
    local top = ranked[1]
    M.enrich_candidate(deal, player_index, target, live, top)
    local discard_action = top.action as DiscardAction
@@ -1000,6 +1056,60 @@ function M.max_feasible_est_fan_hypothetical(
    p.hand.concealed_tiles = saved_concealed
    p.hand.sets            = saved_sets
    return v
+end
+
+-- Kong-specific variant (T19). Kongs trigger a supplement draw after the
+-- call. The "real" post-kong state isn't `hypothetical_concealed +
+-- hypothetical_sets` (10 + kong) — it's that hand plus one supplement
+-- tile then a discard. This function averages max_feasible_est_fan
+-- across the supplement-draw distribution, weighted by live counts:
+--
+--   avg = Σ_k [ live[k] * max_feasible_est_fan(post + tile_of_kind_k) ]
+--         ──────────────────────────────────────────────────────────
+--                              Σ_k live[k]
+--
+-- Returns the integer ceiling of the weighted average so it can be
+-- compared to the same ≥3 floor the non-kong gate uses.
+--
+-- The variance across supplement kinds is usually low (max_feasible_-
+-- est_fan only flips when feasibility flips, which depends on suit
+-- commitments not single-tile additions). The averaging mainly helps
+-- distinguish kongs in suits where most live tiles still keep targets
+-- feasible from kongs in suits where most live tiles would force
+-- infeasibility.
+local KONG_SUPPLEMENT_KINDS: {string} = {
+   "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+   "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
+   "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+   "east","south","west","north","fa_cai","hong_zhong","bai_ban",
+}
+
+function M.kong_post_supplement_avg_fan(
+   deal:               DealState,
+   player_index:       integer,
+   post_kong_concealed: {Tile},
+   post_kong_sets:      {TileSet},
+   live:                {string: integer}
+): number
+   local total: number = 0.0
+   local weight: number = 0.0
+   for _, k in ipairs(KONG_SUPPLEMENT_KINDS) do
+      local n = live[k] or 0
+      if n > 0 then
+         local supp_tile: Tile = {
+            tile_id = ("__supp_" .. k) as TileId,
+            kind_id = k as TileKindId,
+         }
+         local hyp: {Tile} = {}
+         for _, t in ipairs(post_kong_concealed) do hyp[#hyp + 1] = t end
+         hyp[#hyp + 1] = supp_tile
+         local v = M.max_feasible_est_fan_hypothetical(deal, player_index, hyp, post_kong_sets)
+         total = total + (n as number) * (v as number)
+         weight = weight + (n as number)
+      end
+   end
+   if weight == 0.0 then return 0.0 end
+   return total / weight
 end
 
 -- Post-call ting: after a peng / chi / open kong the player has one extra

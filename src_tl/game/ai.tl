@@ -297,8 +297,10 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       local ak_id, ak_ok = find_added_kong_target(concealed, p.hand.sets)
       if ak_ok then
          local rest = tiles_without_id(concealed, ak_id)
-         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, p.hand.sets)
-         if post_max >= POST_CALL_FAN_FLOOR then
+         -- T19: kong gate uses supplement-draw averaging since the kong
+         -- triggers a supplement draw before the next discard.
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, p.hand.sets, live)
+         if post_avg >= POST_CALL_FAN_FLOOR then
             local ak_action = engine.declare_added_kong(player_index, ak_id)
             return ak_action, mk_reasoning(
                "added_kong", "added kong",
@@ -334,8 +336,8 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
          for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
          sets_after[#sets_after + 1] = fake_set
          local after = td.ting_distance_live(rest, sets_after, live)
-         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
-         if after <= before and post_max >= POST_CALL_FAN_FLOOR then
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live)
+         if after <= before and post_avg >= POST_CALL_FAN_FLOOR then
             local ck_action = engine.declare_concealed_kong(player_index, quad_kind)
             return ck_action, mk_reasoning(
                "concealed_kong", "concealed kong " .. (quad_kind as string),
@@ -351,7 +353,7 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       local discard_cands = strategy.evaluate_discard_candidates(
          deal, player_index, strategy.NEUTRAL_PERSONALITY, target, live
       )
-      local ranked = strategy.rank_candidates(discard_cands)
+      local ranked = strategy.rank_candidates(discard_cands, strategy.NEUTRAL_PERSONALITY)
       local top3 = strategy.top_n_candidates(ranked, 3)
       for _, c in ipairs(top3) do
          strategy.enrich_candidate(deal, player_index, target, live, c)
@@ -460,8 +462,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             called_from = discarder,
          }
          local after = td.ting_distance_standard_live(rest, sets_after, live)
-         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
-         if post_max >= POST_CALL_FAN_FLOOR then
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live)
+         if post_avg >= POST_CALL_FAN_FLOOR then
             local ok_action = engine.declare_open_kong(player_index, discarded.tile_id)
             return ok_action, mk_reasoning(
                "open_kong", "open kong " .. (discarded.kind_id as string),
