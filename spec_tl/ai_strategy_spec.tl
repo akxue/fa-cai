@@ -102,6 +102,67 @@ describe("ai_strategy", function()
          assert.are.equal(11, f.max_suit_count)
          assert.are.equal(2, f.off_suit_count)   -- two wan_9
       end)
+
+      it("credits open peng/kong as triplet (Fix A)", function()
+         -- Concealed has 1 triplet (444t); one open peng of 5T should bump
+         -- triplet_count to 2 — the open peng is structurally a pung
+         -- equivalent for dui_dui_hu fitness.
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "tiao_5_a" as TileId, kind_id = "tiao_5" as TileKindId },
+                  { tile_id = "tiao_5_b" as TileId, kind_id = "tiao_5" as TileKindId },
+                  { tile_id = "tiao_5_c" as TileId, kind_id = "tiao_5" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local f = strategy.compute_features(parse("444t 22w 33b"), sets)
+         assert.are.equal(2, f.triplet_count)
+         assert.are.equal(0, f.open_chi_count)
+         assert.is_false(f.has_committed_honor)
+      end)
+
+      it("tracks open_chi_count and committed_suits", function()
+         -- Open chi of 4T-5T-6T → open_chi_count=1, committed_suits=[tiao].
+         local sets: {TileSet} = {
+            {
+               kind = "chi" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "tiao_4_a" as TileId, kind_id = "tiao_4" as TileKindId },
+                  { tile_id = "tiao_5_a" as TileId, kind_id = "tiao_5" as TileKindId },
+                  { tile_id = "tiao_6_a" as TileId, kind_id = "tiao_6" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local f = strategy.compute_features(parse("11w 22w 33b 44b 5b"), sets)
+         assert.are.equal(0, f.triplet_count)         -- chi is not a triplet
+         assert.are.equal(1, f.open_chi_count)
+         assert.are.equal(1, #f.committed_suits)
+         assert.are.equal("tiao", f.committed_suits[1])
+      end)
+
+      it("flags has_committed_honor on open peng of an honor", function()
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "fa_cai_a" as TileId, kind_id = "fa_cai" as TileKindId },
+                  { tile_id = "fa_cai_b" as TileId, kind_id = "fa_cai" as TileKindId },
+                  { tile_id = "fa_cai_c" as TileId, kind_id = "fa_cai" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local f = strategy.compute_features(parse("123t 456t 99t"), sets)
+         assert.is_true(f.has_committed_honor)
+         assert.are.equal(1, f.triplet_count)   -- open peng counted
+      end)
    end)
 
    describe("estimate_fan_for_target", function()
@@ -135,6 +196,71 @@ describe("ai_strategy", function()
          local d = make_deal(parse("123t 456t 789t 99w"), sets)
          local fan = strategy.estimate_fan_for_target(d, 1, "default" as TargetKind)
          assert.are.equal(1, fan)
+      end)
+
+      it("returns 0 for dui_dui_hu when an open chi exists (Fix B)", function()
+         local sets: {TileSet} = {
+            {
+               kind = "chi" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "tiao_3_a" as TileId, kind_id = "tiao_3" as TileKindId },
+                  { tile_id = "tiao_4_a" as TileId, kind_id = "tiao_4" as TileKindId },
+                  { tile_id = "tiao_5_a" as TileId, kind_id = "tiao_5" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         -- Hand-shape would otherwise look great for dui_dui_hu (3 triplets).
+         local d = make_deal(parse("888t 99t 444w 55w 7b"), sets)
+         local fan = strategy.estimate_fan_for_target(d, 1, "dui_dui_hu" as TargetKind)
+         assert.are.equal(0, fan)
+      end)
+
+      it("returns 0 for qing_yi_se with a committed honor (Fix B)", function()
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "fa_cai_a" as TileId, kind_id = "fa_cai" as TileKindId },
+                  { tile_id = "fa_cai_b" as TileId, kind_id = "fa_cai" as TileKindId },
+                  { tile_id = "fa_cai_c" as TileId, kind_id = "fa_cai" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local d = make_deal(parse("123t 456t 789t 99t"), sets)
+         local fan = strategy.estimate_fan_for_target(d, 1, "qing_yi_se" as TargetKind)
+         assert.are.equal(0, fan)
+      end)
+
+      it("returns 0 for qing_yi_se with two committed suits (Fix B)", function()
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "tiao_5_a" as TileId, kind_id = "tiao_5" as TileKindId },
+                  { tile_id = "tiao_5_b" as TileId, kind_id = "tiao_5" as TileKindId },
+                  { tile_id = "tiao_5_c" as TileId, kind_id = "tiao_5" as TileKindId },
+               },
+               called_from = 4,
+            },
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "wan_3_a" as TileId, kind_id = "wan_3" as TileKindId },
+                  { tile_id = "wan_3_b" as TileId, kind_id = "wan_3" as TileKindId },
+                  { tile_id = "wan_3_c" as TileId, kind_id = "wan_3" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local d = make_deal(parse("123t 99w 7b"), sets)
+         assert.are.equal(0, strategy.estimate_fan_for_target(d, 1, "qing_yi_se" as TargetKind))
+         assert.are.equal(0, strategy.estimate_fan_for_target(d, 1, "hun_yi_se" as TargetKind))
       end)
 
       it("includes boon contributions via the runner (forward-compat)", function()

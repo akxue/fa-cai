@@ -469,12 +469,22 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          local combos = calls_mod.chi_combinations(discarded, concealed)
          for _, pair in ipairs(combos) do
             local rest = tiles_remove_id_pair(concealed, pair[1], pair[2])
+            -- Find the two concealed tiles named in this chi combo so the
+            -- simulated set carries real tiles. Without these, compute_features
+            -- can't tell what suit the chi committed to, and the qing_yi_se /
+            -- hun_yi_se feasibility gates miscount committed_suits.
+            local pair_a: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
+            local pair_b: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
+            for _, t in ipairs(concealed) do
+               if t.tile_id == pair[1] then pair_a = t end
+               if t.tile_id == pair[2] then pair_b = t end
+            end
             local sets_after = {} as {TileSet}
             for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
             sets_after[#sets_after + 1] = {
                kind        = "chi" as TileSetKind,
                visibility  = "open" as SetVisibility,
-               tiles       = {},
+               tiles       = { pair_a, pair_b, discarded },
                called_from = discarder,
             }
             local after = strategy.post_call_ting(rest, sets_after, live)

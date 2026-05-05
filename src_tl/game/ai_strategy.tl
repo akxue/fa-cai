@@ -26,15 +26,22 @@ global record AiPersonality
 end
 
 global record HandFeatures
-   honor_count:      integer   -- total honor tiles
-   honor_pairs:      integer   -- distinct honor kinds with ≥2 copies
-   max_suit:         string    -- dominant suit ("tiao" | "wan" | "bing" | "")
-   max_suit_count:   integer   -- count of tiles in max_suit
-   off_suit_count:   integer   -- non-honor tiles outside max_suit
-   pair_count:       integer   -- distinct kinds with ≥2 copies
-   triplet_count:    integer   -- distinct kinds with ≥3 copies
-   open_set_count:   integer
-   has_open_set:     boolean
+   honor_count:          integer   -- total honor tiles (concealed + open)
+   honor_pairs:          integer   -- distinct concealed honor kinds with ≥2 copies
+   max_suit:             string    -- dominant suit ("tiao" | "wan" | "bing" | "")
+   max_suit_count:       integer   -- count of tiles in max_suit
+   off_suit_count:       integer   -- non-honor tiles outside max_suit
+   pair_count:           integer   -- distinct concealed kinds with ≥2 copies
+   triplet_count:        integer   -- concealed triplets + open peng/kong sets;
+                                   -- "structural commitments equivalent to a
+                                   -- pung". Open chi sets are NOT counted here.
+   open_set_count:       integer
+   has_open_set:         boolean
+   open_chi_count:       integer   -- open chi sets; disqualifies dui_dui_hu
+   committed_suits:      {string}  -- distinct non-honor suits in open sets;
+                                   -- if length > 1, qing_yi_se & hun_yi_se die
+   has_committed_honor:  boolean   -- any open peng/kong of an honor; kills
+                                   -- qing_yi_se (which forbids honors)
 end
 
 local record StrategyModule
@@ -162,34 +169,63 @@ function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
       if s ~= max_suit then off_suit = off_suit + n end
    end
 
-   -- Add tiles in declared open sets to the suit counts so target selection
-   -- accounts for committed structure.
+   -- Iterate sets:
+   --   * Credit each open peng/kong as a triplet (a structural commitment
+   --     equivalent to a concealed triplet for dui_dui_hu fitness).
+   --   * Track open_chi_count separately — chis disqualify dui_dui_hu.
+   --   * Track which suits / honors have been committed via open sets, so
+   --     qing_yi_se and hun_yi_se feasibility can be gated.
+   --   * Add open-set tiles to max_suit_count / off_suit_count / honor_count
+   --     so target_fitness sees the full committed picture.
    local open_set_count = #sets
    local has_open = false
+   local open_chi_count = 0
+   local has_committed_honor = false
+   local committed_suits_set: {string: boolean} = {}
+
    for _, sset in ipairs(sets) do
       if (sset.visibility as string) == "open" then has_open = true end
+      local sk = sset.kind as string
+      if sk == "peng" or sk == "kong" then
+         triplet_count = triplet_count + 1
+      elseif sk == "chi" then
+         open_chi_count = open_chi_count + 1
+      end
       for _, t in ipairs(sset.tiles) do
          local k = t.kind_id as string
          if HONOR_KINDS[k] then
             honor_count = honor_count + 1
-         elseif suit_of(k) == max_suit then
-            max_suit_count = max_suit_count + 1
+            if sk == "peng" or sk == "kong" then has_committed_honor = true end
          else
-            off_suit = off_suit + 1
+            local s = suit_of(k)
+            if s ~= "" then committed_suits_set[s] = true end
+            if s == max_suit then
+               max_suit_count = max_suit_count + 1
+            else
+               off_suit = off_suit + 1
+            end
          end
       end
    end
 
+   local committed_suits: {string} = {}
+   for s in pairs(committed_suits_set) do
+      committed_suits[#committed_suits + 1] = s
+   end
+
    return {
-      honor_count    = honor_count,
-      honor_pairs    = honor_pairs,
-      max_suit       = max_suit,
-      max_suit_count = max_suit_count,
-      off_suit_count = off_suit,
-      pair_count     = pair_count,
-      triplet_count  = triplet_count,
-      open_set_count = open_set_count,
-      has_open_set   = has_open,
+      honor_count          = honor_count,
+      honor_pairs          = honor_pairs,
+      max_suit             = max_suit,
+      max_suit_count       = max_suit_count,
+      off_suit_count       = off_suit,
+      pair_count           = pair_count,
+      triplet_count        = triplet_count,
+      open_set_count       = open_set_count,
+      has_open_set         = has_open,
+      open_chi_count       = open_chi_count,
+      committed_suits      = committed_suits,
+      has_committed_honor  = has_committed_honor,
    }
 end
 
@@ -294,6 +330,32 @@ end
 -- Water) still see the correct value and contribute through the runner.
 function M.estimate_fan_for_target(deal: DealState, player_index: integer, target: TargetKind): integer
    local p = deal.players[player_index]
+   local t = target as string
+
+   -- Feasibility gates: if the target's win shape is structurally impossible
+   -- given what's already been committed via open sets, return 0. Without
+   -- this, the AI happily accepts a chi that destroys its own dui_dui_hu
+   -- path because target_base_fan still reports 3 fan for dead shapes.
+   --
+   -- default is intentionally not gated here. Default represents "Ping Hu
+   -- base / no specific shape claim" and is the AI's safety-net target;
+   -- gating it would just push every junk hand to has_three_fan_target =
+   -- false and reject all calls regardless of merit.
+   local feat = M.compute_features(p.hand.concealed_tiles, p.hand.sets)
+   if t == "dui_dui_hu" then
+      -- Pung-only: any open chi makes the win shape impossible.
+      if feat.open_chi_count > 0 then return 0 end
+   elseif t == "qing_yi_se" then
+      -- Pure single suit, no honors: dies on any committed honor or any
+      -- second committed suit.
+      if feat.has_committed_honor then return 0 end
+      if #feat.committed_suits > 1 then return 0 end
+   elseif t == "hun_yi_se" then
+      -- One suit + honors: dies if two suits are already committed.
+      -- (Committed honors are fine — that's the "hun" part.)
+      if #feat.committed_suits > 1 then return 0 end
+   end
+
    local base_fan = target_base_fan(target)
 
    local is_men_qian = true
