@@ -54,6 +54,11 @@ local record LogEntry
    kind: string   -- "ev" | "ai" | "err" | "sys"
 end
 
+local record DiscardItem
+   seat: integer
+   tile: Tile
+end
+
 local record SceneState
    seed:             integer
    deal:             DealState
@@ -531,15 +536,31 @@ local function compute_seat1_self_options(d: DealState): {ActionPromptOption}
       end
    end
 
-   -- Discard the cursor tile. Action is constructed on dispatch using the
-   -- current cursor position; offered last so the keybinds above stay
-   -- discoverable without scanning past Discard.
-   opts[#opts + 1] = {
-      key        = "d",
-      label      = "Discard selected tile",
-      action     = nil,
-      has_action = false,
-   }
+   -- Discard the cursor tile. The button doubles as the confirm step
+   -- for two-click discarding: clicking a tile in the hand sets it as
+   -- the cursor; clicking this button (or clicking the cursored tile
+   -- again) commits the discard.
+   if (state.cursor_tile_id as string) ~= "" then
+      local cursor_tile: Tile = nil
+      for _, t in ipairs(hand) do
+         if t.tile_id == state.cursor_tile_id then cursor_tile = t; break end
+      end
+      if cursor_tile ~= nil then
+         opts[#opts + 1] = {
+            key        = "d",
+            label      = "Discard " .. tile_label(cursor_tile),
+            action     = engine.discard(1, state.cursor_tile_id),
+            has_action = true,
+         }
+      end
+   else
+      opts[#opts + 1] = {
+         key        = "d",
+         label      = "Discard (click a tile first)",
+         action     = nil,
+         has_action = false,
+      }
+   end
    return opts
 end
 
@@ -749,6 +770,15 @@ end
 
 local SEAT_NAMES: {string} = { "East (P1)", "South (P2)", "West (P3)", "North (P4)" }
 
+-- Per-seat discard color (used to tint each tile's border in the center
+-- discard pile so players can see at a glance who threw what).
+local SEAT_COLORS: {{number}} = {
+   { 0.42, 0.62, 0.95 },  -- P1 East   = blue (you)
+   { 0.95, 0.45, 0.40 },  -- P2 South  = red
+   { 0.55, 0.85, 0.50 },  -- P3 West   = green
+   { 0.95, 0.85, 0.40 },  -- P4 North  = gold
+}
+
 local function draw_text(text: string, x: number, y: number)
    love.graphics.print(text, x, y)
 end
@@ -912,21 +942,21 @@ local function draw_opponent_hand_col(seat_index: integer, x: number, y: number,
    end
 end
 
--- Public-area strips. Renders open sets first (greenish tint to call out
--- claimed groupings), then a divider, then discards (ivory). Horizontal
--- variant for top/bottom seats; vertical variant for side seats.
+-- Open-sets strips (formerly "public" strips). Discards live in the
+-- central pile now; these only show open sets next to each player so
+-- claimed groupings are visible adjacent to the seat that owns them.
 
-local function draw_seat_public_row(seat_index: integer, x: number, y: number, w: number, h: number)
+local function draw_seat_open_sets_row(seat_index: integer, x: number, y: number, w: number, h: number)
    draw_panel(x, y, w, h, "")
    local p = state.deal.players[seat_index]
+   if #p.hand.sets == 0 then return end
    local pad = 8
    local gap = 2
-   local set_gap = 8
+   local set_gap = 10
    local tile_w = 22
    local tile_h = h - 14
    local cx = x + pad
    local row_y = y + 8
-
    for _, s in ipairs(p.hand.sets) do
       for _, t in ipairs(s.tiles) do
          tile_render.draw_tile_box(t, cx, row_y, tile_w, tile_h, 0.86, 0.92, 0.86, 0.40, 0.55, 0.45)
@@ -934,45 +964,99 @@ local function draw_seat_public_row(seat_index: integer, x: number, y: number, w
       end
       cx = cx + set_gap
    end
-   if #p.hand.sets > 0 and #p.hand.discards > 0 then
-      love.graphics.setColor(0.40, 0.40, 0.45, 1.0)
-      love.graphics.line(cx, y + 6, cx, y + h - 6)
-      cx = cx + 8
-   end
-   for _, t in ipairs(p.hand.discards) do
-      if cx + tile_w > x + w - pad then break end
-      tile_render.draw_tile_box(t, cx, row_y, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
-      cx = cx + tile_w + gap
-   end
 end
 
-local function draw_seat_public_col(seat_index: integer, x: number, y: number, w: number, h: number)
+local function draw_seat_open_sets_col(seat_index: integer, x: number, y: number, w: number, h: number)
    draw_panel(x, y, w, h, "")
    local p = state.deal.players[seat_index]
+   if #p.hand.sets == 0 then return end
    local pad = 8
    local gap = 2
-   local set_gap = 6
+   local set_gap = 8
    local tile_w = w - 14
    local tile_h = 22
    local cx = x + 7
    local cy = y + 8
-
    for _, s in ipairs(p.hand.sets) do
       for _, t in ipairs(s.tiles) do
+         if cy + tile_h > y + h - pad then return end
          tile_render.draw_tile_box(t, cx, cy, tile_w, tile_h, 0.86, 0.92, 0.86, 0.40, 0.55, 0.45)
          cy = cy + tile_h + gap
       end
       cy = cy + set_gap
    end
-   if #p.hand.sets > 0 and #p.hand.discards > 0 then
-      love.graphics.setColor(0.40, 0.40, 0.45, 1.0)
-      love.graphics.line(x + 6, cy, x + w - 6, cy)
-      cy = cy + 8
+end
+
+-- Center discard pile. Iterates discards in round-robin chronology
+-- (P1[i], P2[i], P3[i], P4[i], P1[i+1], …) so the visual stack-order
+-- approximates how the deal actually unfolded; each tile is rendered
+-- at a base grid slot with a deterministic jitter (hashed from tile_id)
+-- for an organic, slightly-overlapping pile feel. The border color
+-- identifies the discarder.
+local function draw_center_discard_pile(x: number, y: number, w: number, h: number)
+   love.graphics.setColor(0.13, 0.16, 0.18, 1.0)
+   love.graphics.rectangle("fill", x, y, w, h)
+   love.graphics.setColor(0.30, 0.32, 0.36, 1.0)
+   love.graphics.rectangle("line", x, y, w, h)
+
+   local d = state.deal
+   local max_n = 0
+   for seat = 1, 4 do
+      local k = #d.players[seat].hand.discards
+      if k > max_n then max_n = k end
    end
-   for _, t in ipairs(p.hand.discards) do
-      if cy + tile_h > y + h - pad then break end
-      tile_render.draw_tile_box(t, cx, cy, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
-      cy = cy + tile_h + gap
+   if max_n == 0 then
+      love.graphics.setColor(0.45, 0.45, 0.50, 1.0)
+      love.graphics.print("(no discards yet)", x + 14, y + 12)
+      return
+   end
+
+   local tile_w = 26
+   local tile_h = 32
+   local gap_x = 1
+   local gap_y = 1
+   local pad = 18
+   local pile_w = w - 2 * pad
+   local cols = math.floor((pile_w + gap_x) / (tile_w + gap_x))
+   if cols < 1 then cols = 1 end
+
+   -- Round-robin interleave for an approximately-chronological order.
+   local items: {DiscardItem} = {}
+   for i = 1, max_n do
+      for seat = 1, 4 do
+         local list = d.players[seat].hand.discards
+         if i <= #list then
+            items[#items + 1] = { seat = seat, tile = list[i] }
+         end
+      end
+   end
+
+   local n = #items
+   local rows = math.ceil(n / cols)
+   local total_w = cols * tile_w + (cols - 1) * gap_x
+   local total_h = rows * tile_h + (rows - 1) * gap_y
+   local start_x = x + (w - total_w) / 2
+   local start_y = y + math.max(pad, (h - total_h) / 2)
+
+   for i, item in ipairs(items) do
+      local col = (i - 1) % cols
+      local row = math.floor((i - 1) / cols)
+      local base_x = start_x + col * (tile_w + gap_x)
+      local base_y = start_y + row * (tile_h + gap_y)
+
+      -- Deterministic jitter from a small hash over tile_id.
+      local s = item.tile.tile_id as string
+      local hh = 0
+      for j = 1, #s do hh = (hh * 31 + s:byte(j)) % 4096 end
+      local jx = (hh % 7) - 3
+      local jy = (math.floor(hh / 7) % 5) - 2
+
+      local tx = base_x + jx
+      local ty = base_y + jy
+
+      local color = SEAT_COLORS[item.seat]
+      tile_render.draw_tile_box(item.tile, tx, ty, tile_w, tile_h,
+         0.94, 0.92, 0.84, color[1], color[2], color[3])
    end
 end
 
@@ -1009,7 +1093,14 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
    local can_click_discard = state.mode == "run"
       and phase == "awaiting_action"
       and d.current_player == 1
-   local can_click_swap = phase == "opening_actions"
+   -- Tile click in opening_actions only toggles Fresh Start selection
+   -- when the Fresh Start swap_tiles action is actually available
+   -- (i.e., the player took the Fresh Start boon and hasn't used it).
+   local can_click_swap = false
+   if phase == "opening_actions" then
+      local _, ok = opening_action_by_payload("swap_tiles")
+      can_click_swap = ok
+   end
 
    local idxs = sorted_indices(tiles)
    for slot, src_i in ipairs(idxs) do
@@ -1034,11 +1125,19 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
       tile_render.draw_tile_box(t, tx, row_y, tile_w, tile_h, fr, fg, fb, br, bg, bb)
 
       if can_click_discard then
+         -- Two-click confirm: a click on a non-selected tile sets it as
+         -- the cursor (highlight); a click on the already-cursored tile
+         -- commits the discard. The action prompt's "Discard …" row
+         -- offers a redundant click target.
          local tid = t.tile_id
          state.clickables[#state.clickables + 1] = {
             x = tx, y = row_y, w = tile_w, h = tile_h,
             callback = function()
-               apply_player_action(engine.discard(1, tid), "discard " .. (tid as string))
+               if state.cursor_tile_id == tid then
+                  apply_player_action(engine.discard(1, tid), "discard " .. (tid as string))
+               else
+                  state.cursor_tile_id = tid
+               end
             end,
          }
       elseif can_click_swap then
@@ -1064,10 +1163,23 @@ local function draw_status_bar(x: number, y: number, w: number)
    draw_text(s, x + 8, y + 4)
 end
 
--- Classic-layout center panel. Shows current turn / phase / wall count
--- on the first line, then any pending discard / kong / opening-actions
--- prompt on subsequent lines. The action prompt panel sits inside this
--- region as a separate overlay so the click targets stay clear.
+-- Center info panel. Shows current turn / phase / wall on the first
+-- line and any pending discard, kong, or deal-over banner below. In
+-- opening_actions phase shows clickable buttons for the actually-
+-- available actions (Use Fresh Start, Trim surplus, Confirm) — the
+-- panel never advertises Fresh Start unless the boon is active.
+local function draw_button(label: string, x: number, y: number, w: number, h: number, accent_r: number, accent_g: number, accent_b: number, callback: function())
+   love.graphics.setColor(0.20, 0.22, 0.26, 1.0)
+   love.graphics.rectangle("fill", x, y, w, h)
+   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
+   love.graphics.rectangle("line", x, y, w, h)
+   love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
+   love.graphics.print(label, x + 10, y + 6)
+   state.clickables[#state.clickables + 1] = {
+      x = x, y = y, w = w, h = h, callback = callback,
+   }
+end
+
 local function draw_center_info(x: number, y: number, w: number, h: number)
    draw_panel(x, y, w, h, "")
    local d = state.deal
@@ -1075,22 +1187,38 @@ local function draw_center_info(x: number, y: number, w: number, h: number)
    local ty = y + 10
 
    if (d.phase as string) == "opening_actions" then
-      local actions = fx_runner.collect_available_actions(d, d.dealer)
-      love.graphics.setColor(1.0, 0.92, 0.40, 1.0)
-      draw_text("Opening Actions", tx, ty); ty = ty + 20
-      love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
-      draw_text("selected: " .. opening_selection_label(), tx, ty); ty = ty + 18
-      for _, a in ipairs(actions) do
-         draw_text("• " .. a.label, tx, ty); ty = ty + 16
-      end
+      local _, has_fresh_start = opening_action_by_payload("swap_tiles")
       local surplus = #d.players[d.dealer].hand.concealed_tiles - 13
-      if surplus > 0 then
-         draw_text("X to trim opening surplus (" .. tostring(surplus) .. " extra)", tx, ty); ty = ty + 16
+
+      love.graphics.setColor(1.0, 0.92, 0.40, 1.0)
+      draw_text("Opening Setup", tx, ty); ty = ty + 22
+      love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
+      if has_fresh_start then
+         draw_text("Fresh Start: click tiles in your hand to mark up to 3 for swap.", tx, ty); ty = ty + 16
+         love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
+         draw_text("selected: " .. opening_selection_label(), tx, ty); ty = ty + 18
       else
-         draw_text("C / Confirm to begin play", tx, ty); ty = ty + 16
+         love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
+         draw_text("No setup actions available — click Confirm to begin play.", tx, ty); ty = ty + 18
       end
-      love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
-      draw_text("Click tiles in your hand to mark for swap.", tx, ty); ty = ty + 14
+
+      local btn_w = 200
+      local btn_h = 30
+      local btn_x = tx
+      local btn_y = ty + 6
+      if has_fresh_start then
+         draw_button("Use Fresh Start", btn_x, btn_y, btn_w, btn_h, 0.55, 0.85, 0.55,
+            function() use_fresh_start() end)
+         btn_y = btn_y + btn_h + 6
+      end
+      if surplus > 0 then
+         draw_button("Trim opening (" .. tostring(surplus) .. " extra)", btn_x, btn_y, btn_w, btn_h, 1.00, 0.75, 0.40,
+            function() trim_opening_surplus() end)
+         btn_y = btn_y + btn_h + 6
+      else
+         draw_button("Confirm and begin play", btn_x, btn_y, btn_w, btn_h, 1.00, 0.92, 0.40,
+            function() confirm_opening() end)
+      end
       return
    end
 
@@ -1258,12 +1386,17 @@ end
 local function draw_hints(x: number, y: number)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
    if (state.deal.phase as string) == "opening_actions" then
-      draw_text("Click tiles to mark for swap   /   U Fresh Start  X trim  C confirm   /   F1 debug   ESC quit", x, y)
+      local _, has_fresh_start = opening_action_by_payload("swap_tiles")
+      if has_fresh_start then
+         draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   F1 debug   ESC quit", x, y)
+      else
+         draw_text("Click Confirm to begin play   /   F1 debug   ESC quit", x, y)
+      end
    elseif state.mode == "run" and has_seat1_pending_input(state.deal) then
       if (state.deal.phase as string) == "awaiting_action" and state.deal.current_player == 1 then
-         draw_text("Click a tile to discard   /   click an action button or use H/K/U   /   F1 debug   ESC quit", x, y)
+         draw_text("Click a tile to select, click again to discard   /   buttons: Hu / Kong / Discard   /   F1 debug   ESC quit", x, y)
       else
-         draw_text("Click an action button   /   keys: H Hu  P Peng  K Kong  C Chi  X Pass   /   F1 debug   ESC quit", x, y)
+         draw_text("Click an action button   /   keys: H P K C X   /   F1 debug   ESC quit", x, y)
       end
    else
       draw_text("F1 debug overlay   /   T step  S advance  R restart   /   ESC quit", x, y)
@@ -1295,6 +1428,11 @@ function M.draw()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
 
+   -- Keep the cursor pointing at a real tile; this also runs in update
+   -- and keypressed but we re-check here so click-only flows have a
+   -- valid cursor when the prompt panel renders the Discard button.
+   if has_seat1_pending_input(state.deal) then ensure_cursor_valid() end
+
    -- Reset clickables; populated by draw helpers below.
    state.clickables = {}
 
@@ -1321,46 +1459,52 @@ function M.draw()
    local p1_hand_h   = 96  -- player hand strip (face-up)
    local p1_public_h = 56
 
-   -- P3 (top): hand row, then public row below it.
+   -- P3 (top): hand row, then open-sets row below it.
    local p3_hand_y   = table_y
    local p3_public_y = p3_hand_y + edge_short + 4
    draw_opponent_hand_row(3, table_x, p3_hand_y, table_w, edge_short)
-   draw_seat_public_row(3, table_x, p3_public_y, table_w, public_short)
+   draw_seat_open_sets_row(3, table_x, p3_public_y, table_w, public_short)
 
-   -- P1 (bottom): public row, then hand row.
+   -- P1 (bottom): open-sets row, then hand row.
    local p1_hand_y   = table_y + table_h - p1_hand_h
    local p1_public_y = p1_hand_y - p1_public_h - 4
-   draw_seat_public_row(1, table_x, p1_public_y, table_w, p1_public_h)
+   draw_seat_open_sets_row(1, table_x, p1_public_y, table_w, p1_public_h)
    draw_player_hand_row(table_x, p1_hand_y, table_w, p1_hand_h)
 
    -- Side region between top and bottom strips.
    local side_y = p3_public_y + public_short + 8
    local side_h = p1_public_y - 8 - side_y
 
-   -- P4 (left): hand col + public col.
+   -- P4 (left): hand col + open-sets col.
    local p4_hand_x   = table_x
    local p4_public_x = p4_hand_x + edge_short + 4
    draw_opponent_hand_col(4, p4_hand_x, side_y, edge_short, side_h)
-   draw_seat_public_col(4, p4_public_x, side_y, public_short, side_h)
+   draw_seat_open_sets_col(4, p4_public_x, side_y, public_short, side_h)
 
-   -- P2 (right): public col + hand col.
+   -- P2 (right): hand col + open-sets col.
    local p2_hand_x   = table_x + table_w - edge_short
    local p2_public_x = p2_hand_x - public_short - 4
    draw_opponent_hand_col(2, p2_hand_x, side_y, edge_short, side_h)
-   draw_seat_public_col(2, p2_public_x, side_y, public_short, side_h)
+   draw_seat_open_sets_col(2, p2_public_x, side_y, public_short, side_h)
 
-   -- Center area inside the side strips.
+   -- Center area inside the side strips. Stacks vertically:
+   --   info strip (top)   →  discard pile (middle)  → boon + known wall
    local center_x = p4_public_x + public_short + 8
    local center_w = p2_public_x - center_x - 8
    local center_y = side_y
    local info_strip_h = 26
-   local center_h = side_h - info_strip_h * 2 - 4
+   local info_h = 130
+   local pile_h = side_h - info_h - info_strip_h * 2 - 8
+   if pile_h < 80 then pile_h = 80 end
 
-   draw_center_info(center_x, center_y, center_w, center_h)
+   draw_center_info(center_x, center_y, center_w, info_h)
 
-   -- Boon strip + known wall stack at the bottom of the center column.
-   info_panels.draw_boon_strip(state.deal, 1, center_x, center_y + center_h + 4, center_w, info_strip_h)
-   info_panels.draw_known_wall(state.deal, 1, center_x, center_y + center_h + 4 + info_strip_h, center_w, info_strip_h)
+   local pile_y = center_y + info_h + 4
+   draw_center_discard_pile(center_x, pile_y, center_w, pile_h)
+
+   -- Boon strip + known wall at the bottom of the center column.
+   info_panels.draw_boon_strip(state.deal, 1, center_x, pile_y + pile_h + 4, center_w, info_strip_h)
+   info_panels.draw_known_wall(state.deal, 1, center_x, pile_y + pile_h + 4 + info_strip_h, center_w, info_strip_h)
 
    -- Action prompt overlay — drawn inside the center area when seat 1
    -- has a decision. Each option becomes a Clickable.
@@ -1379,7 +1523,10 @@ function M.draw()
       local panel_w = math.min(360, center_w - 16)
       local panel_h = 36 + #opts * 24 + 8
       local panel_x = center_x + (center_w - panel_w) / 2
-      local panel_y = center_y + math.max(8, (center_h - panel_h) / 2)
+      -- Anchor near the top of the discard pile so the prompt is the
+      -- visual focus when the player has a decision; the pile shows
+      -- behind it. Falls back inside the pile area if it doesn't fit.
+      local panel_y = pile_y + math.max(8, (pile_h - panel_h) / 2)
       local rects = action_prompt.draw(opts, title, panel_x, panel_y, panel_w, panel_h)
       for i, r in ipairs(rects) do
          local opt = opts[i]
