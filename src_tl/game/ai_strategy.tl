@@ -45,6 +45,8 @@ local record StrategyModule
    choose_target:                     function(DealState, integer, AiPersonality): (TargetKind, integer)
    compute_ukeire:                    function(DealState, integer, {string: integer}): integer
    pick_best_discard:                 function(DealState, integer, AiPersonality, TargetKind, {string: integer}): (TileId, integer, integer, integer)
+   max_est_fan:                       function(DealState, integer): integer
+   max_est_fan_hypothetical:          function(DealState, integer, {Tile}, {TileSet}): integer
    has_three_fan_target:              function(DealState, integer): boolean
    has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
 end
@@ -65,6 +67,10 @@ M.NEUTRAL_PERSONALITY = {
 
 local HONOR_KINDS: {string: boolean} = {
    east = true, south = true, west = true, north = true,
+   fa_cai = true, hong_zhong = true, bai_ban = true,
+}
+
+local DRAGON_KINDS: {string: boolean} = {
    fa_cai = true, hong_zhong = true, bai_ban = true,
 }
 
@@ -224,9 +230,67 @@ local function target_base_fan(target: TargetKind): integer
    end
 end
 
+-- Counts realized (committed) hand-pattern modifiers from the current hand.
+-- "Realized" means the structure is locked in: completed pengs/kongs in open
+-- sets, or 3+ copies in concealed (a concealed triplet is committed for
+-- scoring purposes since the player can declare it as a concealed kong or
+-- it'll be scored as a triplet at Hu). Pairs are NOT counted — they're
+-- aspirational, not committed.
+--
+-- Modifiers counted:
+--   +1 per dragon (fa_cai / hong_zhong / bai_ban) triplet/kong (Dragon Pung).
+--   +1 per triplet/kong of seat wind (Seat Wind Pung).
+--   +1 per triplet/kong of round wind (Round Wind Pung).
+local function count_realized_modifiers(
+   concealed:  {Tile},
+   sets:       {TileSet},
+   seat_wind:  Wind,
+   round_wind: Wind
+): integer
+   local total = 0
+   local sw = seat_wind as string
+   local rw = round_wind as string
+
+   for _, s in ipairs(sets) do
+      local sk = s.kind as string
+      if (sk == "peng" or sk == "kong") and #s.tiles > 0 then
+         local k = s.tiles[1].kind_id as string
+         if DRAGON_KINDS[k] then total = total + 1
+         elseif k == sw then total = total + 1
+         elseif k == rw then total = total + 1 end
+      end
+   end
+
+   local counts: {string: integer} = {}
+   for _, t in ipairs(concealed) do
+      local k = t.kind_id as string
+      counts[k] = (counts[k] or 0) + 1
+   end
+   for k, n in pairs(counts) do
+      if n >= 3 then
+         if DRAGON_KINDS[k] then total = total + 1
+         elseif k == sw then total = total + 1
+         elseif k == rw then total = total + 1 end
+      end
+   end
+   return total
+end
+
 -- Fan ceiling for `target` from the current hand state. Routes through the
--- effect runner so AI-owned boons contribute. Used as the pre-ting filter:
--- targets with est_fan < 3 are treated as unreachable.
+-- effect runner so AI-owned boons contribute.
+--
+-- The estimate sums:
+--   + the target's base hand-pattern fan (1 / 3 / 3 / 6 for default /
+--     dui_dui_hu / hun_yi_se / qing_yi_se).
+--   + realized fan modifiers from triplets/pengs/kongs already in the hand
+--     (Dragon Pung, Seat Wind Pung, Round Wind Pung).
+--   + boon contributions via `effect_runner.apply_score_modifiers`.
+--
+-- It does NOT count men_qian. Banking on men_qian + zi_mo + Ping Hu is
+-- statistically dominated by any path that calls to lock structural fan;
+-- the AI plans for the open-hand ceiling and treats men_qian as a bonus
+-- if it happens to survive. Boons that read `ctx.is_men_qian` (e.g., Still
+-- Water) still see the correct value and contribute through the runner.
 function M.estimate_fan_for_target(deal: DealState, player_index: integer, target: TargetKind): integer
    local p = deal.players[player_index]
    local base_fan = target_base_fan(target)
@@ -235,7 +299,9 @@ function M.estimate_fan_for_target(deal: DealState, player_index: integer, targe
    for _, s in ipairs(p.hand.sets) do
       if (s.visibility as string) == "open" then is_men_qian = false; break end
    end
-   if is_men_qian then base_fan = base_fan + 1 end   -- men qian +1
+
+   local mod_count = count_realized_modifiers(p.hand.concealed_tiles, p.hand.sets, p.seat_wind, deal.round_wind)
+   base_fan = base_fan + mod_count
 
    -- Pick a pair kind from concealed (first kind with ≥2 copies) for the
    -- synthetic shape; falls back to first concealed tile.
@@ -259,7 +325,7 @@ function M.estimate_fan_for_target(deal: DealState, player_index: integer, targe
       incoming_tile = incoming,
       has_incoming  = true,
       is_zi_mo      = false,
-      is_men_qian   = is_men_qian,
+      is_men_qian   = is_men_qian,   -- correctly set so men_qian-reading boons can fire
       is_hai_di     = false,
       is_gang_shang = false,
       is_qiang_gang = false,
@@ -275,11 +341,11 @@ function M.estimate_fan_for_target(deal: DealState, player_index: integer, targe
          is_limit = false,
       },
    }
-   if is_men_qian then
+   if mod_count > 0 then
       base_reasons[#base_reasons + 1] = {
          category = "modifier" as ScoreReasonCategory,
-         label    = "men_qian",
-         fan      = 1,
+         label    = "realized_modifiers",
+         fan      = mod_count,
          is_limit = false,
       }
    end
@@ -463,20 +529,53 @@ function M.pick_best_discard(
    return best_id, before, best_ting, best_uke
 end
 
--- ── Used by ai.tl to decide whether a call/kong leaves a 3-fan path open ──
+-- ── Used by ai.tl to gate call/kong decisions ────────────────────────────
+--
+-- max_est_fan returns the raw maximum est_fan across all four targets,
+-- ignoring fitness. The gate question is "does any 3-fan path exist for
+-- this hand state?", not "does my preferred target reach 3 fan?" Using the
+-- raw max means a hand with weak fitness for hun_yi_se but est_fan=4 there
+-- still counts as "has a 3-fan path" — appropriate for gating decisions
+-- about whether to PROTECT a 3-fan-reachable state.
 
--- Returns true if the AI's *chosen* target (best fitness × est_fan filter)
--- has est_fan ≥ 3. Mirrors `choose_target` semantics so the gate is
--- consistent with what the AI will actually pursue. A hand that can only
--- reach Ping Hu (1 fan) returns false — the AI cannot legally Hu.
+function M.max_est_fan(deal: DealState, player_index: integer): integer
+   local best = 0
+   for _, t in ipairs(TARGETS) do
+      local f = M.estimate_fan_for_target(deal, player_index, t)
+      if f > best then best = f end
+   end
+   return best
+end
+
+function M.max_est_fan_hypothetical(
+   deal:                   DealState,
+   player_index:           integer,
+   hypothetical_concealed: {Tile},
+   hypothetical_sets:      {TileSet}
+): integer
+   local p = deal.players[player_index]
+   local saved_concealed = p.hand.concealed_tiles
+   local saved_sets      = p.hand.sets
+   p.hand.concealed_tiles = hypothetical_concealed
+   p.hand.sets            = hypothetical_sets
+   local v = M.max_est_fan(deal, player_index)
+   p.hand.concealed_tiles = saved_concealed
+   p.hand.sets            = saved_sets
+   return v
+end
+
+-- Returns true if the AI's *chosen* target (best fitness × est_fan) has
+-- est_fan ≥ 3. Mirrors choose_target's semantics so the gate aligns with
+-- what the AI will actually pursue. Using raw max_est_fan instead would
+-- always pass because qing_yi_se's base of 6 inflates the ceiling on
+-- every hand regardless of structural reachability.
 function M.has_three_fan_target(deal: DealState, player_index: integer): boolean
-   local _target, est_fan = M.choose_target(deal, player_index, M.NEUTRAL_PERSONALITY)
+   local _t, est_fan = M.choose_target(deal, player_index, M.NEUTRAL_PERSONALITY)
    return est_fan >= 3
 end
 
--- Hypothetical variant: temporarily swaps the player's concealed_tiles and
--- sets, runs has_three_fan_target, then restores. Used by ai.tl to test
--- post-kong / post-call states without a full engine clone.
+-- Hypothetical variant: temporarily swaps the player's hand and runs
+-- has_three_fan_target.
 function M.has_three_fan_target_hypothetical(
    deal:                   DealState,
    player_index:           integer,
@@ -488,10 +587,10 @@ function M.has_three_fan_target_hypothetical(
    local saved_sets      = p.hand.sets
    p.hand.concealed_tiles = hypothetical_concealed
    p.hand.sets            = hypothetical_sets
-   local ok = M.has_three_fan_target(deal, player_index)
+   local v = M.has_three_fan_target(deal, player_index)
    p.hand.concealed_tiles = saved_concealed
    p.hand.sets            = saved_sets
-   return ok
+   return v
 end
 
 return M

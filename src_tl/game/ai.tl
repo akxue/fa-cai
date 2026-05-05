@@ -272,12 +272,10 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
       local live = M.compute_live_counts(deal, player_index)
 
-      -- Added Kong: only declare if it preserves a 3-fan-reachable target.
+      -- Added Kong: strict gate — declare only if a 3-fan target remains
+      -- reachable post-kong.
       local ak_id, ak_ok = find_added_kong_target(concealed, p.hand.sets)
       if ak_ok then
-         -- Post-kong concealed = current concealed minus the matched tile.
-         -- Sets are unchanged at this checkpoint (engine upgrades the peng
-         -- separately); for the fan-reachability check this is conservative.
          local rest = tiles_without_id(concealed, ak_id)
          if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, p.hand.sets) then
             return engine.declare_added_kong(player_index, ak_id), mk_reasoning(
@@ -287,29 +285,38 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
          end
       end
 
-      -- Concealed Kong: only declare if (a) ting doesn't worsen and (b) a 3-fan
-      -- target remains reachable post-kong.
+      -- Concealed Kong: strict gate (no ting regression + 3-fan path remains).
+      -- Concealed kong preserves men_qian (it's a "concealed" set) so it's
+      -- structurally clean; the risk is locking 4 tiles into a kong when
+      -- they could have been better used elsewhere — caught by the
+      -- ting-not-regress check. Build the kong set with the 4 actual tiles
+      -- so realized-modifier counting captures dragon/wind kongs.
       local quad_kind, has_quad = find_concealed_quad_kind(concealed)
       if has_quad then
          local before = td.ting_distance_live(concealed, p.hand.sets, live)
          local rest   = tiles_without_kind(concealed, quad_kind, 4)
+         local kong_tiles: {Tile} = {}
+         for _, t in ipairs(concealed) do
+            if t.kind_id == quad_kind and #kong_tiles < 4 then
+               kong_tiles[#kong_tiles + 1] = t
+            end
+         end
          local fake_set: TileSet = {
             kind        = "kong" as TileSetKind,
             visibility  = "concealed" as SetVisibility,
-            tiles       = {},
+            tiles       = kong_tiles,
             called_from = -1,
          }
          local sets_after: {TileSet} = {}
          for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
          sets_after[#sets_after + 1] = fake_set
          local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before then
-            if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
-               return engine.declare_concealed_kong(player_index, quad_kind), mk_reasoning(
-                  "concealed_kong", "concealed kong " .. (quad_kind as string),
-                  target as string, before, after, -1, est_fan
-               )
-            end
+         if after <= before
+            and strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+            return engine.declare_concealed_kong(player_index, quad_kind), mk_reasoning(
+               "concealed_kong", "concealed kong " .. (quad_kind as string),
+               target as string, before, after, -1, est_fan
+            )
          end
       end
 
@@ -394,6 +401,18 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       local live   = M.compute_live_counts(deal, player_index)
       local before = td.ting_distance_live(concealed, p.hand.sets, live)
       local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
+      -- Strict gate: accept a call only if the post-call hand still has a
+      -- 3-fan-reachable target (using fitness × est_fan via choose_target).
+      -- Combined with the realized-modifier logic in estimate_fan_for_target,
+      -- this means: pengs of dragons / seat-wind / round-wind get accepted
+      -- (the new triplet realizes a +1 fan modifier), pengs that progress a
+      -- structurally-feasible pattern target get accepted, and pengs that
+      -- just shuffle tiles without creating a 3-fan path get rejected.
+      --
+      -- Earlier tried "permissive accept" (reject only if call DESTROYS a
+      -- pre-existing 3-fan path). On 10 seeds it dropped Hu rate from 6/10
+      -- to 1/10 — junk hands accepted too many sub-strategic calls and lost
+      -- their concealed-path optionality without converging on anything.
 
       -- Open Kong: 3 in hand + 1 from discard. Set absorbs all 3 matching tiles.
       if calls_mod.can_open_kong(discarded, concealed, discarder, player_index) then
@@ -403,7 +422,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          sets_after[#sets_after + 1] = {
             kind        = "kong" as TileSetKind,
             visibility  = "open" as SetVisibility,
-            tiles       = {},
+            tiles       = { discarded, discarded, discarded, discarded },
             called_from = discarder,
          }
          local after = td.ting_distance_live(rest, sets_after, live)
@@ -416,7 +435,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          end
       end
 
-      -- Peng: 2 in hand + 1 from discard.
+      -- Peng: 2 in hand + 1 from discard. Strict gate.
       if calls_mod.can_peng(discarded, concealed, discarder, player_index) then
          local rest = tiles_without_kind(concealed, discarded.kind_id, 2)
          local sets_after = {} as {TileSet}
@@ -424,7 +443,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          sets_after[#sets_after + 1] = {
             kind        = "peng" as TileSetKind,
             visibility  = "open" as SetVisibility,
-            tiles       = {},
+            tiles       = { discarded, discarded, discarded },
             called_from = discarder,
          }
          local after = td.ting_distance_live(rest, sets_after, live)
@@ -437,8 +456,12 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          end
       end
 
-      -- Chi: only the next player can chi. Take the first combination that
-      -- does not regress ting AND still has a 3-fan-reachable target.
+      -- Chi: only the next player can chi. Stricter gate than peng — chi
+      -- commits to a sequence orientation, which can lock the hand into the
+      -- wrong direction. Require the post-chi hand to still have a 3-fan
+      -- path (not just "doesn't destroy an existing one"). This means chi
+      -- is rejected on hands that have no 3-fan path either way; the AI
+      -- doesn't flail with chis on doomed hands.
       if calls_mod.is_next_player(discarder, player_index, PLAYER_COUNT) then
          local combos = calls_mod.chi_combinations(discarded, concealed)
          for _, pair in ipairs(combos) do

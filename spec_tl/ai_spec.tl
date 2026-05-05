@@ -268,19 +268,24 @@ describe("ai", function()
          assert.are.equal("open_kong", reason.tag)
       end)
 
-      it("calls peng when ting does not regress", function()
-         -- Two of a kind + matching discard. After peng, ting should not worsen.
+      it("calls peng when standard ting does not regress", function()
+         -- Two of a kind + matching discard. The AI either pengs (because
+         -- standard ting doesn't regress and a 3-fan path survives) or
+         -- passes. Both are acceptable — this test guards against the
+         -- regression "AI accepts a peng that worsens standard ting."
          local hand = parse("11t 222w 333b 44b 55b 6w")
          local d = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 2, "" as TileId, false)
          d = set_pending_discard(d, tile("tiao_1_c", "tiao_1"), 2)
-         local before = td.ting_distance(hand, {})
          local action, reason = ai.decide_reaction(d, 1)
          if action.kind == "declare_peng" then
-            assert.is_true(reason.ting_after <= before)
+            -- AI accepted: live-aware standard ting on the post-peng hand
+            -- must be ≤ live-aware standard ting on the pre-peng hand.
+            local live = ai.compute_live_counts(d, 1)
+            local before_std = td.ting_distance_standard_live(hand, {}, live)
+            assert.is_true(reason.ting_after <= before_std,
+               "ting_after=" .. tostring(reason.ting_after) .. " > before_std=" .. tostring(before_std))
          else
-            -- If the engine prefers pass for ting reasons, that's also OK; this
-            -- test guards regression on the documented "no regress" rule.
             assert.are.equal("pass_reaction", action.kind)
          end
       end)
