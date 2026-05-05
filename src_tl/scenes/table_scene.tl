@@ -68,6 +68,43 @@ local function format_set(s: TileSet): string
    return "[" .. kind_short .. " " .. body .. "]"
 end
 
+-- Mahjong-friendly tile order for display: tiao 1-9 → wan 1-9 → bing 1-9 →
+-- E S W N → F H B. Rules state stays in original (draw) order; this only
+-- sorts what the human sees so pairs and runs are visually adjacent.
+local KIND_ORDER: {string: integer} = {}
+do
+   local i = 1
+   for _, suit in ipairs({"tiao", "wan", "bing"}) do
+      for r = 1, 9 do
+         KIND_ORDER[suit .. "_" .. tostring(r)] = i
+         i = i + 1
+      end
+   end
+   for _, h in ipairs({"east", "south", "west", "north", "fa_cai", "hong_zhong", "bai_ban"}) do
+      KIND_ORDER[h] = i
+      i = i + 1
+   end
+end
+
+local function tile_order_key(t: Tile): integer
+   return KIND_ORDER[t.kind_id as string] or 999
+end
+
+-- Returns indices into `tiles` sorted by KIND_ORDER, with tile_id as a
+-- deterministic tiebreaker. Indices are preserved so callers can still
+-- reference the original slot (used for opening-action keybinds).
+local function sorted_indices(tiles: {Tile}): {integer}
+   local idxs: {integer} = {}
+   for i = 1, #tiles do idxs[i] = i end
+   table.sort(idxs, function(a: integer, b: integer): boolean
+      local ka = tile_order_key(tiles[a])
+      local kb = tile_order_key(tiles[b])
+      if ka ~= kb then return ka < kb end
+      return (tiles[a].tile_id as string) < (tiles[b].tile_id as string)
+   end)
+   return idxs
+end
+
 -- ── Scene state ──────────────────────────────────────────────────────────
 
 local record LogEntry
@@ -407,6 +444,19 @@ local function draw_text(text: string, x: number, y: number)
    love.graphics.print(text, x, y)
 end
 
+-- Prints `text` wrapped to `limit` pixels wide and returns the height used.
+-- Use this for hand/sets/discards/log entries that can grow past their panel
+-- and get painted over by adjacent panels.
+local function draw_text_wrapped(text: string, x: number, y: number, limit: number): number
+   if limit < 16 then limit = 16 end
+   love.graphics.printf(text, x, y, limit, "left")
+   local font = love.graphics.getFont()
+   local _w, lines = font:getWrap(text, limit)
+   local n = #lines
+   if n < 1 then n = 1 end
+   return n * font:getHeight()
+end
+
 local function draw_panel(x: number, y: number, w: number, h: number, label: string)
    love.graphics.setColor(0.18, 0.18, 0.20, 1.0)
    love.graphics.rectangle("fill", x, y, w, h)
@@ -420,8 +470,11 @@ end
 
 local function format_concealed(player: PlayerState, reveal: boolean): string
    if reveal then
+      local tiles = player.hand.concealed_tiles
+      local idxs = sorted_indices(tiles)
       local parts: {string} = {}
-      for i, t in ipairs(player.hand.concealed_tiles) do
+      for _, i in ipairs(idxs) do
+         local t = tiles[i]
          local label = tile_label(t)
          if (state.deal.phase as string) == "opening_actions"
             and player.is_human
@@ -501,8 +554,9 @@ local function draw_seat_panel(seat_index: integer, x: number, y: number, w: num
 
    local tx = x + 8
    local ty = y + 22
+   local limit = w - 16
    local reveal = p.is_human or state.inspector_open
-   draw_text("hand: " .. format_concealed(p, reveal), tx, ty); ty = ty + 16
+   ty = ty + draw_text_wrapped("hand: " .. format_concealed(p, reveal), tx, ty, limit) + 2
    if reveal then
       draw_text("ting: " .. ting_label(seat_index), tx, ty); ty = ty + 16
    else
@@ -510,9 +564,9 @@ local function draw_seat_panel(seat_index: integer, x: number, y: number, w: num
    end
    local sets = format_open_sets(p)
    if sets ~= "" then
-      draw_text("sets: " .. sets, tx, ty); ty = ty + 16
+      ty = ty + draw_text_wrapped("sets: " .. sets, tx, ty, limit) + 2
    end
-   draw_text("disc: " .. format_discards(p), tx, ty); ty = ty + 16
+   ty = ty + draw_text_wrapped("disc: " .. format_discards(p), tx, ty, limit) + 2
 end
 
 local function draw_status_bar(x: number, y: number, w: number)
@@ -586,7 +640,10 @@ local function draw_log(x: number, y: number, w: number, h: number)
    draw_panel(x, y, w, h, "Log")
    local start = math.max(1, #state.log - LOG_VISIBLE + 1)
    local ty = y + 22
+   local limit = w - 16
+   local bottom = y + h - 4
    for i = start, #state.log do
+      if ty >= bottom then break end
       local e = state.log[i]
       if e.kind == "err" then
          love.graphics.setColor(1.0, 0.55, 0.55, 1.0)
@@ -597,8 +654,7 @@ local function draw_log(x: number, y: number, w: number, h: number)
       else
          love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
       end
-      draw_text(e.text, x + 8, ty)
-      ty = ty + 14
+      ty = ty + draw_text_wrapped(e.text, x + 8, ty, limit)
    end
 end
 
