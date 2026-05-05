@@ -301,20 +301,27 @@ end
 -- ── Target selection ──────────────────────────────────────────────────────
 
 -- Computes a per-target fitness score from features. Higher = better fit.
+-- Tuned so:
+--   - qing_yi_se beats hun_yi_se when no honors are present.
+--   - hun_yi_se beats qing_yi_se when honors are present.
+--   - default is a baseline that wins for genuinely mixed hands.
 local function target_fitness(target: TargetKind, f: HandFeatures): number
    local t = target as string
    if t == "dui_dui_hu" then
-      -- Fits when many pairs, few sequences. Each pair = 1 step toward 4 triplets.
+      -- Fits when many pairs/triplets, few sequences.
       return (f.pair_count * 2.0) + (f.triplet_count * 3.0) + (f.honor_pairs * 1.0)
    elseif t == "qing_yi_se" then
-      -- Fits when one suit dominates and no honors.
-      return (f.max_suit_count * 1.0) - (f.off_suit_count * 0.5) - (f.honor_count * 1.0)
+      -- Fits when one suit dominates and zero honors. Heavy honor penalty
+      -- because qing_yi_se forbids honors entirely.
+      return (f.max_suit_count * 1.0) - (f.off_suit_count * 0.5) - (f.honor_count * 2.0)
    elseif t == "hun_yi_se" then
-      -- Fits when one suit dominates and honors are present.
-      return (f.max_suit_count * 1.0) + (f.honor_count * 0.8) - (f.off_suit_count * 0.5)
+      -- Fits when one suit dominates AND honors are present. The 0.7
+      -- multiplier on max_suit_count means hun_yi_se needs honors to beat
+      -- qing_yi_se's pure suit fitness.
+      return (f.max_suit_count * 0.7) + (f.honor_count * 1.0) - (f.off_suit_count * 0.5)
    else   -- default
-      -- Universally feasible; modest baseline so it wins by default when
-      -- no shape strongly fits.
+      -- Universally feasible; modest baseline so it wins for genuinely
+      -- mixed hands with no strong shape signal.
       return 6.0
    end
 end
@@ -458,15 +465,13 @@ end
 
 -- ── Used by ai.tl to decide whether a call/kong leaves a 3-fan path open ──
 
--- Returns true if the resulting hand can still reach a target with est_fan ≥ 3.
--- Pure helper — does not mutate `deal`. For perf, callers can mutate a copy
--- and call this directly.
+-- Returns true if the AI's *chosen* target (best fitness × est_fan filter)
+-- has est_fan ≥ 3. Mirrors `choose_target` semantics so the gate is
+-- consistent with what the AI will actually pursue. A hand that can only
+-- reach Ping Hu (1 fan) returns false — the AI cannot legally Hu.
 function M.has_three_fan_target(deal: DealState, player_index: integer): boolean
-   for _, t in ipairs(TARGETS) do
-      local est = M.estimate_fan_for_target(deal, player_index, t)
-      if est >= 3 then return true end
-   end
-   return false
+   local _target, est_fan = M.choose_target(deal, player_index, M.NEUTRAL_PERSONALITY)
+   return est_fan >= 3
 end
 
 -- Hypothetical variant: temporarily swaps the player's concealed_tiles and

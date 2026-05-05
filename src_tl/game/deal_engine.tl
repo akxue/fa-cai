@@ -594,6 +594,7 @@ local function apply_hu_on_discard(d: DealState, winner_index: integer): DealTra
    local validator = require("game.hand_validator")
    local p        = d.players[winner_index]
    local incoming = d.pending_discard.tile
+   local discarder = d.pending_discard.discarder
    local ctx      = build_score_ctx(d, winner_index, false, false, false)
    local shapes   = validator.find_win_shapes(p.hand.concealed_tiles, incoming, p.hand.sets)
    local output   = scorer_mod.score_hand(shapes, ctx)
@@ -604,6 +605,10 @@ local function apply_hu_on_discard(d: DealState, winner_index: integer): DealTra
    if not score_passes_threshold(final) then
       return err(d, "resolve: hu on discard no longer valid after modifiers")
    end
+   -- Move the discarded tile into the discarder's discards so it stays
+   -- accounted for after we clear pending_discard (the invariant only
+   -- counts pending_discard when has_pending_discard is true).
+   d.players[discarder].hand.discards[#d.players[discarder].hand.discards + 1] = incoming
    d.phase = "deal_over" as DealPhase
    d.deal_result = {
       winner_player_index = winner_index,
