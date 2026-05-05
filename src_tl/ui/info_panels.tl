@@ -66,8 +66,9 @@ function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: num
 end
 
 -- Known-wall reveals for `owner_index` rendered as small face-up tile
--- boxes. Tile lookup walks d.wall.tiles since revealed tiles have not
--- been drawn yet — once drawn, the engine clears them from the list.
+-- boxes. Tiles are still in d.wall.tiles (the engine clears entries
+-- when consumed); we build a one-shot id→Tile map so the per-id lookup
+-- is O(known + wall) instead of O(known × wall).
 function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
    panel_bg(x, y, w, h, "Known Wall")
 
@@ -78,16 +79,17 @@ function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: num
       return
    end
 
+   local by_id: {string: Tile} = {}
+   for _, t in ipairs(d.wall.tiles) do by_id[t.tile_id as string] = t end
+
    local tile_w = 22
    local tile_h = h - 8
    local gap = 3
    local cx = x + 96
    for _, id in ipairs(ids) do
-      for _, t in ipairs(d.wall.tiles) do
-         if t.tile_id == id then
-            tile_render.draw_tile_box(t, cx, y + 4, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
-            break
-         end
+      local t = by_id[id as string]
+      if t ~= nil then
+         tile_render.draw_tile_box(t, cx, y + 4, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
       end
       cx = cx + tile_w + gap
    end

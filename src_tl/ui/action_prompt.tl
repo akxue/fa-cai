@@ -12,10 +12,8 @@ require("game.deal_types")
 global record ActionPromptOption
    key:    string       -- the key the player presses (e.g. "p", "h", "x")
    label:  string       -- human-readable description
-   action: DealAction   -- optional pre-built engine action; may be nil for
-                        -- options the scene constructs on dispatch (e.g.
-                        -- "discard selected tile").
-   has_action: boolean
+   action: DealAction   -- nil for placeholder options the scene
+                        -- constructs at dispatch time
 end
 
 global record OptionRect

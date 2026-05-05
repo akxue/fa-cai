@@ -87,13 +87,14 @@ local record SceneState
    -- Run-state reference so table_scene can decrement lives and route
    -- to reward/result scenes when the deal ends.
    run_state: RunState
-   -- One-shot guard so the deal_over → reward/result transition only
-   -- fires once per deal.
-   transitioned: boolean
-   -- Click targets registered during the current draw. Rebuilt each
-   -- frame; mousepressed walks the list and invokes the matching
-   -- callback.
    clickables: {Clickable}
+   -- Cached prompt options: rebuilt on engine transitions (ticks change)
+   -- and, for "self" options, on cursor changes. Avoids rerunning
+   -- find_win_shapes + scorer + boon modifiers 3-5x per frame.
+   cached_opts_tick:   integer
+   cached_opts_kind:   string    -- "" | "reaction" | "self"
+   cached_opts_cursor: TileId
+   cached_opts:        {ActionPromptOption}
 end
 
 local state: SceneState = nil
@@ -171,8 +172,11 @@ local function reset(seed: integer)
       last_reason_by_seat = {},
       cursor_tile_id   = "" as TileId,
       run_state        = rs,
-      transitioned     = false,
       clickables       = {},
+      cached_opts_tick   = -1,
+      cached_opts_kind   = "",
+      cached_opts_cursor = "" as TileId,
+      cached_opts        = {},
    }
    push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. " mode=" .. mode .. ")")
    check_conservation()
@@ -329,6 +333,7 @@ end
 -- enumerator whether seat 1 has any reaction beyond Pass; the body is
 -- defined later in the file.
 local compute_seat1_reaction_options: function(d: DealState): {ActionPromptOption}
+local options_cached:                 function(d: DealState, kind: string): {ActionPromptOption}
 
 -- Forward declarations. is_men_qian and score_with_modifiers live near
 -- the inspector helpers; would_be_valid_hu calls them up here so the
@@ -385,8 +390,7 @@ local function has_seat1_pending_input(d: DealState): boolean
    local phase = d.phase as string
    if phase == "awaiting_action" and d.current_player == 1 then return true end
    if seat1_can_react(d) then
-      local opts = compute_seat1_reaction_options(d)
-      return #opts > 1
+      return #options_cached(d, "reaction") > 1
    end
    return false
 end
@@ -452,7 +456,6 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
             key        = "h",
             label      = "Hu (claim " .. tile_label(pd_tile) .. ")",
             action     = engine.declare_hu(1, pd_tile.tile_id, false),
-            has_action = true,
          }
       end
    end
@@ -464,7 +467,6 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
             key        = "h",
             label      = "Hu / Qiang Gang " .. tile_label(pk_tile),
             action     = engine.declare_hu(1, pk_tile.tile_id, false),
-            has_action = true,
          }
       end
    end
@@ -476,7 +478,6 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
             key        = "p",
             label      = "Peng " .. tile_label(pd.tile),
             action     = engine.declare_peng(1, pd.tile.tile_id),
-            has_action = true,
          }
       end
       if calls_mod.can_open_kong(pd.tile, hand, pd.discarder, 1) then
@@ -484,7 +485,6 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
             key        = "k",
             label      = "Open Kong " .. tile_label(pd.tile),
             action     = engine.declare_open_kong(1, pd.tile.tile_id),
-            has_action = true,
          }
       end
       if calls_mod.is_next_player(pd.discarder, 1, 4) then
@@ -494,7 +494,6 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
                key        = "c",
                label      = "Chi " .. tile_label(pd.tile),
                action     = engine.declare_chi(1, pd.tile.tile_id, combos[1]),
-               has_action = true,
             }
          end
       end
@@ -504,7 +503,6 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
       key        = "x",
       label      = "Pass",
       action     = engine.pass_reaction(1),
-      has_action = true,
    }
    return opts
 end
@@ -528,7 +526,6 @@ local function compute_seat1_self_options(d: DealState): {ActionPromptOption}
             key        = "h",
             label      = "Hu / Zi Mo " .. tile_label(last_tile),
             action     = engine.declare_hu(1, last_id, true),
-            has_action = true,
          }
       end
    end
@@ -549,7 +546,6 @@ local function compute_seat1_self_options(d: DealState): {ActionPromptOption}
          key        = "k",
          label      = "Concealed Kong (" .. quad_kinds[1] .. ")",
          action     = engine.declare_concealed_kong(1, quad_kinds[1] as TileKindId),
-         has_action = true,
       }
    end
 
@@ -567,7 +563,6 @@ local function compute_seat1_self_options(d: DealState): {ActionPromptOption}
             key        = "u",
             label      = "Added Kong " .. tile_label(t),
             action     = engine.declare_added_kong(1, t.tile_id),
-            has_action = true,
          }
          break
       end
@@ -584,21 +579,37 @@ local function compute_seat1_self_options(d: DealState): {ActionPromptOption}
       end
       if cursor_tile ~= nil then
          opts[#opts + 1] = {
-            key        = "d",
-            label      = "Discard " .. tile_label(cursor_tile),
-            action     = engine.discard(1, state.cursor_tile_id),
-            has_action = true,
+            key    = "d",
+            label  = "Discard " .. tile_label(cursor_tile),
+            action = engine.discard(1, state.cursor_tile_id),
          }
       end
-   else
-      opts[#opts + 1] = {
-         key        = "d",
-         label      = "Discard (click a tile first)",
-         action     = nil,
-         has_action = false,
-      }
    end
    return opts
+end
+
+-- Tick-keyed cache. compute_seat1_*_options runs find_win_shapes +
+-- scorer + boon modifiers per Hu candidate; without the cache it fires
+-- 3-5 times per frame in M.update / M.draw / draw_hints. The result
+-- only changes on engine transitions (ticks bump) or, for "self", when
+-- the cursor moves.
+function options_cached(d: DealState, kind: string): {ActionPromptOption}
+   local cursor = state.cursor_tile_id
+   if state.cached_opts_tick == state.ticks
+      and state.cached_opts_kind == kind
+      and (kind ~= "self" or state.cached_opts_cursor == cursor)
+   then
+      return state.cached_opts
+   end
+   if kind == "reaction" then
+      state.cached_opts = compute_seat1_reaction_options(d)
+   else
+      state.cached_opts = compute_seat1_self_options(d)
+   end
+   state.cached_opts_tick   = state.ticks
+   state.cached_opts_kind   = kind
+   state.cached_opts_cursor = cursor
+   return state.cached_opts
 end
 
 local function apply_player_action(action: DealAction, label: string): boolean
@@ -669,21 +680,15 @@ function M.load()
    reset(DEFAULT_SEED)
 end
 
--- Hand off to reward/result scenes after deal_over in run mode. Routed
--- through scene_stack.fire_deal_over so this scene does not statically
--- import reward_scene or result_scene (which would create a cycle with
--- start_scene → boon_select_scene → table_scene). main.tl installs the
--- concrete handler at startup.
-local function transition_after_deal_over()
-   if state.transitioned then return end
-   state.transitioned = true
-   scene_stack.fire_deal_over(state.deal, state.run_state)
-end
-
 function M.update(dt: number)
    if state.deal == nil then return end
    if (state.deal.phase as string) == "deal_over" then
-      if state.mode == "run" then transition_after_deal_over() end
+      -- Hand off to reward/result via main.tl's deal_over handler.
+      -- The handler synchronously replaces this scene, so subsequent
+      -- update ticks won't reach here.
+      if state.mode == "run" then
+         scene_stack.fire_deal_over(state.deal, state.run_state)
+      end
       return
    end
    if state.step_mode and state.wait_for_step then return end
@@ -779,25 +784,10 @@ function M.keypressed(key: string)
       if key == "r" then jump_cursor(14); return end
    end
 
-   -- Action dispatch: match key against the option list for the current phase.
-   local opts: {ActionPromptOption}
-   if phase == "reaction_window" then
-      opts = compute_seat1_reaction_options(d)
-   else
-      opts = compute_seat1_self_options(d)
-   end
+   local opts = options_cached(d, phase == "reaction_window" and "reaction" or "self")
    for _, opt in ipairs(opts) do
       if key == opt.key then
-         if opt.has_action then
-            apply_player_action(opt.action, opt.label)
-         elseif key == "d" and phase == "awaiting_action" and d.current_player == 1 then
-            -- Discard the cursor-selected tile.
-            if (state.cursor_tile_id as string) == "" then
-               push_log("sys", "no tile selected to discard")
-               return
-            end
-            apply_player_action(engine.discard(1, state.cursor_tile_id), "discard " .. (state.cursor_tile_id as string))
-         end
+         apply_player_action(opt.action, opt.label)
          return
       end
    end
@@ -1436,24 +1426,8 @@ local function draw_hints(x: number, y: number)
    end
 end
 
--- Dispatch a single ActionPromptOption (used by both keyboard and click
--- paths in awaiting_action / reaction_window).
 local function dispatch_option(opt: ActionPromptOption)
-   if opt.has_action then
-      apply_player_action(opt.action, opt.label)
-      return
-   end
-   if opt.key == "d"
-      and (state.deal.phase as string) == "awaiting_action"
-      and state.deal.current_player == 1
-   then
-      if (state.cursor_tile_id as string) == "" then
-         push_log("sys", "no tile selected to discard")
-         return
-      end
-      apply_player_action(engine.discard(1, state.cursor_tile_id),
-         "discard " .. (state.cursor_tile_id as string))
-   end
+   apply_player_action(opt.action, opt.label)
 end
 
 function M.draw()
@@ -1544,15 +1518,9 @@ function M.draw()
    if has_seat1_pending_input(state.deal) then
       local d = state.deal
       local phase = d.phase as string
-      local opts: {ActionPromptOption}
-      local title: string
-      if phase == "reaction_window" then
-         opts = compute_seat1_reaction_options(d)
-         title = "Reaction — choose an action"
-      else
-         opts = compute_seat1_self_options(d)
-         title = "Your turn"
-      end
+      local kind = phase == "reaction_window" and "reaction" or "self"
+      local opts = options_cached(d, kind)
+      local title = kind == "reaction" and "Reaction — choose an action" or "Your turn"
       local panel_w = math.min(360, center_w - 16)
       local panel_h = 36 + #opts * 24 + 8
       local panel_x = center_x + (center_w - panel_w) / 2
