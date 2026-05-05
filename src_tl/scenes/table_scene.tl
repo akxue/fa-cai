@@ -28,6 +28,7 @@ local boons_init = require("effects.boons.init")
 local calls_mod  = require("game.calls")
 local tile_render   = require("ui.tile_render")
 local action_prompt = require("ui.action_prompt")
+local info_panels   = require("ui.info_panels")
 
 local M = {}
 
@@ -1117,18 +1118,20 @@ function M.draw()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
 
-   -- Layout: status bar on top, table grid (3x3) in the middle, player hand
-   -- row at the bottom of the table area, log + inspector on the right,
-   -- hints at the very bottom.
+   -- Layout: status bar on top, table grid (3x3) in the middle, two
+   -- info strips (boons / known wall) above the player hand row, the
+   -- player hand row at the bottom, log + inspector on the right, hints
+   -- at the very bottom.
    local margin = 8
    local hint_h = 20
    local status_h = 24
    local hand_row_h = 80
+   local info_strip_h = 26
    local right_w = 360
    local table_w = sw - right_w - margin * 3
    local content_y = margin + status_h + margin
    local content_h = sh - content_y - hint_h - margin * 2
-   local grid_h = content_h - hand_row_h - margin
+   local grid_h = content_h - hand_row_h - info_strip_h * 2 - margin * 2
 
    draw_status_bar(margin, margin, sw - margin * 2)
 
@@ -1154,8 +1157,15 @@ function M.draw()
    -- tiles render in draw_player_hand_row below.
    draw_seat_panel(1, tx + cell_w, ty + cell_h * 2, cell_w, cell_h)
 
-   -- Player hand row spans the full table width below the grid.
-   local hand_y = content_y + grid_h + margin
+   -- Two info strips above the hand row: boons (with counters) and the
+   -- player's known-wall reveals.
+   local boon_y = content_y + grid_h + margin
+   info_panels.draw_boon_strip(state.deal, 1, tx, boon_y, table_w, info_strip_h)
+   local kw_y = boon_y + info_strip_h
+   info_panels.draw_known_wall(state.deal, 1, tx, kw_y, table_w, info_strip_h)
+
+   -- Player hand row spans the full table width below the info strips.
+   local hand_y = kw_y + info_strip_h + margin
    draw_player_hand_row(tx, hand_y, table_w, hand_row_h)
 
    -- Action prompt panel overlay — sits above the hand row, anchored
