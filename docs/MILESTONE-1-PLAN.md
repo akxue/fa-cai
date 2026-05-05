@@ -122,11 +122,12 @@ Use a `Makefile` and `tlconfig.lua`.
 Expected commands:
 
 ```sh
-make check   # Teal typecheck
-make build   # Generate Lua from Teal
-make test    # Typecheck, build, run busted specs
-make run     # Build and launch LÖVE
-make clean   # Remove generated Lua
+make check    # Teal typecheck
+make build    # Generate Lua from Teal
+make test     # Typecheck, build, run busted specs
+make run      # Build and launch LÖVE
+make playtest # Run scripts/playtest.lua headless AI sweep (S07)
+make clean    # Remove generated Lua
 ```
 
 Generated Lua should not be committed during development.
@@ -205,6 +206,9 @@ spec_tl/
 
 src/   # generated Lua, ignored
 spec/  # generated Lua specs, ignored
+
+scripts/
+  playtest.lua    # headless AI sweep harness (S07)
 ```
 
 ---
@@ -1639,8 +1643,10 @@ Tasks (multiple PR-sized commits, each measurable on the harness):
 Harness first (commit 1, behavior-neutral):
 
 - `T01`: Move headless playtest driver into the repo at `scripts/playtest.lua`. Track per-seed Hu/wall/stuck outcomes plus aggregate metrics: Hu rate, wall exhaustion rate, avg steps per deal, target distribution at Hu, total call mix, invalid action count.
-- `T02`: Add `make playtest` target. Document the S06 baseline (6/10 Hu) inline so every later commit's diff against this baseline is explicit.
-- `T03`: Capture pre-rebuild metrics in the slice notes — exact per-seed outcomes plus aggregate row — so each subsequent commit can be compared.
+- `T02`: Add `make playtest` target. Document the S06 baseline (7/10 Hu — see note below) inline so every later commit's diff against this baseline is explicit.
+- `T03`: Capture pre-rebuild metrics in `docs/playtest-logs/s07-baseline.md` — exact per-seed outcomes plus aggregate row — so each subsequent commit can be compared.
+
+> Baseline note: the S06 completion summary cites 6/10 Hu, but the merged S06 tip's actual rate is **7/10** because the user's PR-review fixes (compute_features ordering, wind stacking, known-wall propagation) moved seed 12345 from wall exhaustion to a Hu. Each S07 commit must match or beat 7/10. Every Hu in the baseline is Dui Dui Hu — the heuristic's collapse to triplet-racing is what the rebuild is intended to address.
 
 Pipeline scaffold (commit 2, behavior-neutral):
 

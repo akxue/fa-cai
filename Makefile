@@ -9,7 +9,9 @@ SPEC_TL   := spec_tl
 SPEC_OUT  := spec
 LUA_COMPAT := lua_compat
 
-.PHONY: check build test run clean
+LUA    := $(LUA54)/lua
+
+.PHONY: check build test run playtest clean
 
 check:
 	$(TL) check $(SRC_TL)/main.tl
@@ -36,6 +38,12 @@ test: build
 
 run: build
 	$(LOVE) $(SRC_OUT)/
+
+# Headless AI playtest harness. Runs scripts/playtest.lua against the built
+# Lua tree and reports per-seed outcomes plus aggregate metrics. The S06
+# baseline (6/10 Hu) is documented in scripts/playtest.lua's header.
+playtest: build
+	$(LUA) scripts/playtest.lua
 
 clean:
 	rm -rf $(SRC_OUT)/ $(SPEC_OUT)/
