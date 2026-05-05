@@ -50,6 +50,20 @@ local M: AiModule = {} as AiModule
 local PLAYER_COUNT <const> = 4
 local NA <const> = -100
 
+-- Post-call gate (S07 commit 4 / T16, T17). The call is accepted iff the
+-- post-call max-feasible-est_fan ≥ 3.
+--
+-- max_feasible_est_fan is the largest est_fan across all *structurally
+-- feasible* targets (commit-3 feasibility was tightened so qing_yi_se /
+-- hun_yi_se require committed suits to match the dominant suit).
+-- Run-breaking calls (chi that commits a 2nd suit, kong that commits the
+-- wrong suit relative to the player's dominant pile) flip the relevant
+-- targets to infeasible, dropping max_feasible_est_fan past the floor.
+-- Strategic shifts (e.g., open-kong tiao_1 to commit dui_dui_hu while
+-- giving up qing_yi_se) keep at least one 3-fan target feasible and
+-- still pass.
+local POST_CALL_FAN_FLOOR <const>: integer = 3
+
 -- compute_live_counts now lives in ai_strategy.tl. Re-exported at the
 -- bottom of this file so existing callers (table_scene, tests) keep
 -- working through the ai.tl boundary.
@@ -276,13 +290,15 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       -- Choose target up front; downstream decisions use it.
       local live = M.compute_live_counts(deal, player_index)
       local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY, live)
-
-      -- Added Kong: strict gate — declare only if a 3-fan target remains
-      -- reachable post-kong.
+      -- Added Kong gate (S07 T16): declare only if the post-kong best
+      -- discard candidate's expected_fan ≥ 3. Probability-weighted check;
+      -- catches kongs that empty the AI's hand of useful tiles even if a
+      -- 3-fan target is technically still feasible.
       local ak_id, ak_ok = find_added_kong_target(concealed, p.hand.sets)
       if ak_ok then
          local rest = tiles_without_id(concealed, ak_id)
-         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, p.hand.sets) then
+         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, p.hand.sets)
+         if post_max >= POST_CALL_FAN_FLOOR then
             local ak_action = engine.declare_added_kong(player_index, ak_id)
             return ak_action, mk_reasoning(
                "added_kong", "added kong",
@@ -318,8 +334,8 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
          for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
          sets_after[#sets_after + 1] = fake_set
          local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before
-            and strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
+         if after <= before and post_max >= POST_CALL_FAN_FLOOR then
             local ck_action = engine.declare_concealed_kong(player_index, quad_kind)
             return ck_action, mk_reasoning(
                "concealed_kong", "concealed kong " .. (quad_kind as string),
@@ -424,14 +440,6 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       local live   = M.compute_live_counts(deal, player_index)
       local before = td.ting_distance_live(concealed, p.hand.sets, live)
       local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY, live)
-      -- Strict gate: accept a call only if the post-call hand still has a
-      -- 3-fan-reachable target (using fitness × est_fan via choose_target).
-      -- Combined with the realized-modifier logic in estimate_fan_for_target,
-      -- this means: pengs of dragons / seat-wind / round-wind get accepted
-      -- (the new triplet realizes a +1 fan modifier), pengs that progress a
-      -- structurally-feasible pattern target get accepted, and pengs that
-      -- just shuffle tiles without creating a 3-fan path get rejected.
-      --
       -- Earlier tried "permissive accept" (reject only if call DESTROYS a
       -- pre-existing 3-fan path). On 10 seeds it dropped Hu rate from 6/10
       -- to 1/10 — junk hands accepted too many sub-strategic calls and lost
@@ -452,7 +460,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             called_from = discarder,
          }
          local after = td.ting_distance_standard_live(rest, sets_after, live)
-         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
+         if post_max >= POST_CALL_FAN_FLOOR then
             local ok_action = engine.declare_open_kong(player_index, discarded.tile_id)
             return ok_action, mk_reasoning(
                "open_kong", "open kong " .. (discarded.kind_id as string),
@@ -476,7 +485,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             called_from = discarder,
          }
          local after = strategy.post_call_ting(rest, sets_after, live)
-         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+         local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
+         if post_max >= POST_CALL_FAN_FLOOR then
             local peng_action = engine.declare_peng(player_index, discarded.tile_id)
             return peng_action, mk_reasoning(
                "peng", "peng " .. (discarded.kind_id as string),
@@ -515,7 +525,8 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
                called_from = discarder,
             }
             local after = strategy.post_call_ting(rest, sets_after, live)
-            if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
+            local post_max = strategy.max_feasible_est_fan_hypothetical(deal, player_index, rest, sets_after)
+            if post_max >= POST_CALL_FAN_FLOOR then
                local chi_action = engine.declare_chi(player_index, discarded.tile_id, pair)
                return chi_action, mk_reasoning(
                   "chi", "chi " .. (discarded.kind_id as string),

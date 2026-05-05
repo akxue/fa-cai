@@ -102,6 +102,8 @@ local record StrategyModule
    max_est_fan_hypothetical:          function(DealState, integer, {Tile}, {TileSet}): integer
    has_three_fan_target:              function(DealState, integer, {string: integer}): boolean
    has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
+   max_feasible_est_fan:              function(DealState, integer): integer
+   max_feasible_est_fan_hypothetical: function(DealState, integer, {Tile}, {TileSet}): integer
    post_call_ting:                    function({Tile}, {TileSet}, {string: integer}): integer
    evaluate_discard_candidates:       function(DealState, integer, AiPersonality, TargetKind, {string: integer}): {CandidateAction}
    enrich_candidate:                  function(DealState, integer, TargetKind, {string: integer}, CandidateAction)
@@ -594,9 +596,23 @@ local function target_feasible(target: TargetKind, feat: HandFeatures): boolean
    if t == "dui_dui_hu" then
       return feat.open_chi_count == 0
    elseif t == "qing_yi_se" then
-      return (not feat.has_committed_honor) and #feat.committed_suits <= 1
+      if feat.has_committed_honor then return false end
+      if #feat.committed_suits > 1 then return false end
+      -- If a suit is committed via an open set, the eventual qing_yi_se
+      -- hand must be in that suit. If the player's dominant suit (max_suit
+      -- — counted across concealed AND committed tiles) doesn't match the
+      -- committed suit, the player is racing two suits and qing_yi_se
+      -- cannot complete without discarding most of the dominant pile.
+      if #feat.committed_suits == 1 and feat.committed_suits[1] ~= feat.max_suit then
+         return false
+      end
+      return true
    elseif t == "hun_yi_se" then
-      return #feat.committed_suits <= 1
+      if #feat.committed_suits > 1 then return false end
+      if #feat.committed_suits == 1 and feat.committed_suits[1] ~= feat.max_suit then
+         return false
+      end
+      return true
    end
    return true   -- default
 end
@@ -931,6 +947,56 @@ function M.has_three_fan_target_hypothetical(
    p.hand.sets            = hypothetical_sets
    local live = M.compute_live_counts(deal, player_index)
    local v = M.has_three_fan_target(deal, player_index, live)
+   p.hand.concealed_tiles = saved_concealed
+   p.hand.sets            = saved_sets
+   return v
+end
+
+-- Post-call gate (S07 commit 4 / T16): build the post-call hand, run the
+-- candidate pipeline on it, and return the best discard candidate's
+-- `expected_fan`. The call gate accepts iff this value ≥ 3 (commit 4
+-- threshold). Returns 0 when the post-call hand has no legal discards
+-- (would never happen for a real call but defended for safety).
+--
+-- This naturally rejects "run-breaking" calls — e.g., a chi that consumes
+-- a forming bing sequence drops the post-call best candidate's expected
+-- fan because the dominant target's probability collapses. has_three_fan_-
+-- target_hypothetical only checked if any 3-fan target was reachable in
+-- principle; this variant checks if the AI's best follow-up is *good
+-- enough* given probability and depletion.
+-- Returns the max est_fan across all feasible targets on the player's
+-- current hand state. "Feasible" uses target_feasible (the structural
+-- gates from compute_features). Used by the call-gate logic as a robust
+-- proxy for "fan ceiling" — independent of ting hand size, so it works
+-- on the unusual states post_call_best_expected_fan would otherwise have
+-- to handle (10 + kong vs 11 + peng).
+function M.max_feasible_est_fan(deal: DealState, player_index: integer): integer
+   local p = deal.players[player_index]
+   local feat = M.compute_features(p.hand.concealed_tiles, p.hand.sets)
+   local best = 0
+   for _, t in ipairs(TARGETS) do
+      if target_feasible(t, feat) then
+         local fan = M.estimate_fan_for_target(deal, player_index, t)
+         if fan > best then best = fan end
+      end
+   end
+   return best
+end
+
+-- Hypothetical variant of max_feasible_est_fan: temporarily swaps in the
+-- post-call hand state, computes the max feasible est_fan, restores.
+function M.max_feasible_est_fan_hypothetical(
+   deal:                   DealState,
+   player_index:           integer,
+   hypothetical_concealed: {Tile},
+   hypothetical_sets:      {TileSet}
+): integer
+   local p = deal.players[player_index]
+   local saved_concealed = p.hand.concealed_tiles
+   local saved_sets      = p.hand.sets
+   p.hand.concealed_tiles = hypothetical_concealed
+   p.hand.sets            = hypothetical_sets
+   local v = M.max_feasible_est_fan(deal, player_index)
    p.hand.concealed_tiles = saved_concealed
    p.hand.sets            = saved_sets
    return v

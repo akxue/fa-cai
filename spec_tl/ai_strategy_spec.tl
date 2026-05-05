@@ -593,6 +593,48 @@ describe("ai_strategy", function()
       end)
    end)
 
+   describe("max_feasible_est_fan (T16)", function()
+      it("returns 6 for a feasible qing_yi_se hand (single suit, no honors)", function()
+         local d = make_deal(parse("123t 456t 789t 22t 99t"), {})
+         assert.are.equal(6, strategy.max_feasible_est_fan(d, 1))
+      end)
+
+      it("drops once a chi commits a second suit (T17 run-breaking)", function()
+         -- Pre: qing_yi_se hand in tiao with no committed suits → max=6.
+         -- Post (hypothetical chi that commits a wan set): qing_yi_se /
+         -- hun_yi_se die because committed_suits exceeds 1; max collapses
+         -- to whatever's left (default=2 with men_qian, or dui_dui_hu=3
+         -- if structure allows). With an open chi present, dui_dui_hu is
+         -- also infeasible → max should drop.
+         local d = make_deal(parse("123t 456t 789t 22t 99t"), {})
+         local pre_max = strategy.max_feasible_est_fan(d, 1)
+
+         local post_concealed: {Tile} = {}
+         for _, t in ipairs(d.players[1].hand.concealed_tiles) do
+            post_concealed[#post_concealed + 1] = t
+         end
+         -- Drop two tiao tiles to "use" them for the chi simulation; add
+         -- a wan-suit chi set committing wan as a second suit.
+         table.remove(post_concealed, 1)
+         table.remove(post_concealed, 1)
+         local post_sets: {TileSet} = {
+            {
+               kind = "chi" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "wan_1_a" as TileId, kind_id = "wan_1" as TileKindId },
+                  { tile_id = "wan_2_a" as TileId, kind_id = "wan_2" as TileKindId },
+                  { tile_id = "wan_3_a" as TileId, kind_id = "wan_3" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local post_max = strategy.max_feasible_est_fan_hypothetical(d, 1, post_concealed, post_sets)
+         assert.is_true(post_max < pre_max,
+            string.format("expected post-chi max_feasible_est_fan < pre (pre=%d post=%d)", pre_max, post_max))
+      end)
+   end)
+
    describe("has_three_fan_target", function()
       it("returns true for a hand that can reach dui_dui_hu", function()
          local d = make_deal(parse("111t 222w 333b 44b 55b"), {})
