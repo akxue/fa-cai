@@ -17,8 +17,9 @@ M.metadata = {
    priority    = 100,
 }
 
-function M.on_opening_deal_complete(_hctx: EffectOpeningContext, _deal: DealState): {EffectCommand}
-   return { runner.cmd_reveal_wall_front(5) }
+function M.on_opening_deal_complete(hctx: EffectOpeningContext, _deal: DealState): {EffectCommand}
+   if not hctx.active.has_owner then return {} end
+   return { runner.cmd_reveal_wall_front(5, hctx.active.owner_player_index) }
 end
 
 return M

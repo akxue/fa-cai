@@ -655,7 +655,7 @@ local function draw_inspector(x: number, y: number, w: number, h: number)
       draw_text("  " .. state.conservation_msg, tx, ty); ty = ty + 16
    end
 
-   draw_text("known wall (player only): " .. tostring(#d.known_wall_tile_ids) .. " tiles", tx, ty); ty = ty + 16
+   draw_text("known wall (player): " .. tostring(#d.players[1].known_wall_tile_ids) .. " tiles", tx, ty); ty = ty + 16
 
    draw_text("active effects: " .. tostring((function(): integer
       local n = 0

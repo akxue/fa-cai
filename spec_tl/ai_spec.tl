@@ -45,10 +45,11 @@ local function make_deal(
 ): DealState
    local function mk(tiles: {Tile}, sw: string, human: boolean): PlayerState
       return {
-         hand         = { concealed_tiles = tiles, sets = {}, discards = {} },
-         opening_trim = {},
-         seat_wind    = sw as Wind,
-         is_human     = human,
+         hand                = { concealed_tiles = tiles, sets = {}, discards = {} },
+         opening_trim        = {},
+         seat_wind           = sw as Wind,
+         is_human            = human,
+         known_wall_tile_ids = {},
       }
    end
    return {
@@ -71,7 +72,6 @@ local function make_deal(
          declarer = 0,
       },
       has_pending_kong         = false,
-      known_wall_tile_ids      = {},
       rng                      = rng_mod.from_seed(1),
       deal_result              = {
          winner_player_index = 0, won_by_zi_mo = false,
@@ -180,13 +180,16 @@ describe("ai", function()
          assert.are.equal("bing_5_a", (action_a as DiscardAction).tile_id as string)
       end)
 
-      it("does not read known_wall_tile_ids", function()
+      it("M1 vanilla AI ignores its own seat's known_wall_tile_ids", function()
+         -- AI may read its own seat's known wall (forward-compat with future
+         -- info effects), but vanilla M1 AI does not consult it. Populating
+         -- the seat's known wall must not change the chosen discard.
          local hand = parse("111t 222w 333b 44b 55b 9w")
          local d_clean = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
          local d_misled = make_deal(hand, parse("123t 456t 789t 11w 9w"), parse("123b 456b 789b 11t 9t"), parse("234t 567t 891w E S W N N"),
             {}, "awaiting_action", 1, "" as TileId, false)
-         d_misled.known_wall_tile_ids = { ("tiao_1_a") as TileId, ("wan_9_a") as TileId }
+         d_misled.players[1].known_wall_tile_ids = { ("tiao_1_a") as TileId, ("wan_9_a") as TileId }
          local a1 = ai.decide_main(d_clean, 1)
          local a2 = ai.decide_main(d_misled, 1)
          assert.are.equal((a1 as DiscardAction).tile_id, (a2 as DiscardAction).tile_id)

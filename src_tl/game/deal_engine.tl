@@ -66,10 +66,11 @@ end
 
 local function copy_player(p: PlayerState): PlayerState
    return {
-      hand         = copy_hand(p.hand),
-      opening_trim = copy_tiles(p.opening_trim),
-      seat_wind    = p.seat_wind,
-      is_human     = p.is_human,
+      hand                = copy_hand(p.hand),
+      opening_trim        = copy_tiles(p.opening_trim),
+      seat_wind           = p.seat_wind,
+      is_human            = p.is_human,
+      known_wall_tile_ids = copy_tile_ids(p.known_wall_tile_ids),
    }
 end
 
@@ -124,7 +125,6 @@ local function copy_deal(d: DealState): DealState
       has_pending_discard      = d.has_pending_discard,
       pending_added_kong       = d.pending_added_kong,
       has_pending_kong         = d.has_pending_kong,
-      known_wall_tile_ids      = copy_tile_ids(d.known_wall_tile_ids),
       rng                      = d.rng,
       deal_result              = d.deal_result,
       has_deal_result          = d.has_deal_result,
@@ -378,10 +378,11 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
          w = dr.wall
       end
       players[i] = {
-         hand = { concealed_tiles = hand_tiles, sets = {}, discards = {} },
-         opening_trim = {},
-         seat_wind    = SEAT_WINDS[i],
-         is_human     = (i == 1),
+         hand                = { concealed_tiles = hand_tiles, sets = {}, discards = {} },
+         opening_trim        = {},
+         seat_wind           = SEAT_WINDS[i],
+         is_human            = (i == 1),
+         known_wall_tile_ids = {},
       }
    end
 
@@ -396,7 +397,6 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
       has_pending_discard      = false,
       pending_added_kong       = empty_pending_kong(),
       has_pending_kong         = false,
-      known_wall_tile_ids      = {},
       rng                      = cur_rng,
       deal_result              = empty_deal_result(),
       has_deal_result          = false,
@@ -545,7 +545,8 @@ local function handle_draw(deal: DealState, action: DrawAction): DealTransition
    d.players[action.player_index].hand.concealed_tiles[
       #d.players[action.player_index].hand.concealed_tiles + 1
    ] = dr.tile
-   d.known_wall_tile_ids      = remove_known(d.known_wall_tile_ids, dr.tile.tile_id)
+   d.players[action.player_index].known_wall_tile_ids =
+      remove_known(d.players[action.player_index].known_wall_tile_ids, dr.tile.tile_id)
    d.last_draw_was_supplement = false
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true

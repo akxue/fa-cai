@@ -46,10 +46,11 @@ global record PendingAddedKong
 end
 
 global record PlayerState
-   hand:          PlayerHand
-   opening_trim:  {Tile}   -- tiles trimmed during opening; not in discard pile
-   seat_wind:     Wind
-   is_human:      boolean
+   hand:                 PlayerHand
+   opening_trim:         {Tile}   -- tiles trimmed during opening; not in discard pile
+   seat_wind:            Wind
+   is_human:             boolean
+   known_wall_tile_ids:  {TileId} -- per-seat wall visibility from info effects (Third Eye, Open Eyes)
 end
 
 global record DealResult
@@ -78,7 +79,6 @@ global record DealState
    has_pending_discard:  boolean
    pending_added_kong:   PendingAddedKong
    has_pending_kong:     boolean
-   known_wall_tile_ids:  {TileId}
    rng:                  RngState
    deal_result:          DealResult
    has_deal_result:      boolean

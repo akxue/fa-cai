@@ -105,8 +105,8 @@ describe("effect_runner.apply_commands", function()
    it("reveal_wall_front clamps at remaining wall size", function()
       local rs = make_run_with_boons({}, 1)
       local d = engine.new_deal_with_run(rng_mod.from_seed(7), rs)
-      runner.apply_commands(d, { runner.cmd_reveal_wall_front(5) })
-      assert.are.equal(5, #d.known_wall_tile_ids)
+      runner.apply_commands(d, { runner.cmd_reveal_wall_front(5, 1) })
+      assert.are.equal(5, #d.players[1].known_wall_tile_ids)
    end)
 end)
 
@@ -118,9 +118,9 @@ describe("third_eye", function()
    it("reveals next 5 front-Wall tiles after opening deal", function()
       local rs = make_run_with_boons({"third_eye"}, 1)
       local d = engine.new_deal_with_run(rng_mod.from_seed(7), rs)
-      assert.are.equal(5, #d.known_wall_tile_ids)
-      assert.are.equal(d.wall.tiles[1].tile_id, d.known_wall_tile_ids[1])
-      assert.are.equal(d.wall.tiles[5].tile_id, d.known_wall_tile_ids[5])
+      assert.are.equal(5, #d.players[1].known_wall_tile_ids)
+      assert.are.equal(d.wall.tiles[1].tile_id, d.players[1].known_wall_tile_ids[1])
+      assert.are.equal(d.wall.tiles[5].tile_id, d.players[1].known_wall_tile_ids[5])
    end)
 
    it("preserves tile conservation after reveal", function()
@@ -159,7 +159,7 @@ describe("open_eyes", function()
       }
       d.phase = "awaiting_action" as DealPhase
       d.current_player = 4
-      d.known_wall_tile_ids = {}
+      d.players[1].known_wall_tile_ids = {}
 
       -- p4 discards wan_5_a → reaction window
       local tr1 = engine.apply_action(d, engine.discard(4, "wan_5_a" as TileId))
@@ -172,9 +172,9 @@ describe("open_eyes", function()
       local tr4 = engine.apply_action(tr3.deal, engine.declare_peng(1, "wan_5_a" as TileId))
       assert.is_true(tr4.ok, tr4.error)
 
-      assert.are.equal(3, #tr4.deal.known_wall_tile_ids)
-      assert.are.equal("bing_1_a", tr4.deal.known_wall_tile_ids[1] as string)
-      assert.are.equal("bing_3_a", tr4.deal.known_wall_tile_ids[3] as string)
+      assert.are.equal(3, #tr4.deal.players[1].known_wall_tile_ids)
+      assert.are.equal("bing_1_a", tr4.deal.players[1].known_wall_tile_ids[1] as string)
+      assert.are.equal("bing_3_a", tr4.deal.players[1].known_wall_tile_ids[3] as string)
    end)
 end)
 
@@ -451,7 +451,7 @@ describe("fresh_start", function()
       local rs = make_run_with_boons({"fresh_start", "third_eye"}, 1)
       local d = engine.new_deal_with_run(rng_mod.from_seed(7), rs)
       -- Sanity: Third Eye filled known_wall; Fresh Start should clear it.
-      assert.is_true(#d.known_wall_tile_ids > 0)
+      assert.is_true(#d.players[1].known_wall_tile_ids > 0)
 
       local original_concealed: {string} = {}
       for _, t in ipairs(d.players[1].hand.concealed_tiles) do
@@ -470,7 +470,7 @@ describe("fresh_start", function()
       local d2 = tr.deal
       assert.are.equal(13, #d2.players[1].hand.concealed_tiles)
       assert.is_true(d2.effect_states["fresh_start_1"].used_this_deal)
-      assert.are.equal(0, #d2.known_wall_tile_ids)
+      assert.are.equal(0, #d2.players[1].known_wall_tile_ids)
       local r = invariants.validate_tile_conservation(d2)
       assert.is_true(r.ok, r.details)
    end)

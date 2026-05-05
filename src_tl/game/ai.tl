@@ -6,8 +6,10 @@
 --
 -- Both return (DealAction, AiReasoning). The scene drives turn pumping by
 -- calling these functions and dispatching the returned action through the
--- engine. The AI never mutates state directly and never reads
--- known_wall_tile_ids (player-only information).
+-- engine. The AI never mutates state directly. An AI seat may read its own
+-- `players[seat].known_wall_tile_ids` (populated only when that seat owns an
+-- info effect like Third Eye / Open Eyes); it must not read another seat's
+-- list. M1 vanilla AIs own no info effects, so this read returns empty.
 
 require("core.types")
 require("game.deal_types")
