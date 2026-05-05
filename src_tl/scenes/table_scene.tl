@@ -30,6 +30,8 @@ local tile_render   = require("ui.tile_render")
 local action_prompt = require("ui.action_prompt")
 local info_panels   = require("ui.info_panels")
 local clickable_mod = require("ui.clickable")
+local panel         = require("ui.panel")
+local button        = require("ui.button")
 local scene_stack   = require("app.scene_stack")
 
 local M = {}
@@ -823,16 +825,7 @@ local function draw_text_wrapped(text: string, x: number, y: number, limit: numb
    return n * font:getHeight()
 end
 
-local function draw_panel(x: number, y: number, w: number, h: number, label: string)
-   love.graphics.setColor(0.18, 0.18, 0.20, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(0.40, 0.40, 0.45, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
-   if label ~= "" then
-      love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
-      draw_text(label, x + 8, y + 4)
-   end
-end
+local draw_panel = panel.draw
 
 local function opening_selection_label(): string
    if #state.selected_opening_tile_ids == 0 then return "(none)" end
@@ -1192,15 +1185,7 @@ end
 -- available actions (Use Fresh Start, Trim surplus, Confirm) — the
 -- panel never advertises Fresh Start unless the boon is active.
 local function draw_button(label: string, x: number, y: number, w: number, h: number, accent_r: number, accent_g: number, accent_b: number, callback: function())
-   love.graphics.setColor(0.20, 0.22, 0.26, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
-   love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
-   love.graphics.print(label, x + 10, y + 6)
-   state.clickables[#state.clickables + 1] = {
-      x = x, y = y, w = w, h = h, callback = callback,
-   }
+   button.draw(label, x, y, w, h, accent_r, accent_g, accent_b, state.clickables, callback)
 end
 
 local function draw_center_info(x: number, y: number, w: number, h: number)

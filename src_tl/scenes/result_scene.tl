@@ -12,6 +12,7 @@ require("app.scene_stack")
 
 local scene_stack   = require("app.scene_stack")
 local clickable_mod = require("ui.clickable")
+local button        = require("ui.button")
 -- Transitions go through scene_stack.fire_retry / fire_back_to_start so
 -- this scene avoids statically importing start_scene or table_scene.
 -- main.tl owns those concrete transitions.
@@ -50,15 +51,7 @@ function M.update(_dt: number)
 end
 
 local function draw_button(label: string, x: number, y: number, w: number, h: number, accent_r: number, accent_g: number, accent_b: number, callback: function())
-   love.graphics.setColor(0.20, 0.18, 0.22, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
-   love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
-   love.graphics.print(label, x + 16, y + 10)
-   state.clickables[#state.clickables + 1] = {
-      x = x, y = y, w = w, h = h, callback = callback,
-   }
+   button.draw(label, x, y, w, h, accent_r, accent_g, accent_b, state.clickables, callback)
 end
 
 function M.draw()

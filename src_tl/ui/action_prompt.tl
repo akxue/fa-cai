@@ -8,6 +8,7 @@
 -- caller can register Clickables that dispatch each option.
 
 require("game.deal_types")
+local panel = require("ui.panel")
 
 global record ActionPromptOption
    key:    string       -- the key the player presses (e.g. "p", "h", "x")
@@ -28,13 +29,7 @@ local M = {}
 local ROW_H <const> = 24
 
 function M.draw(opts: {ActionPromptOption}, title: string, x: number, y: number, w: number, h: number): {OptionRect}
-   love.graphics.setColor(0.18, 0.18, 0.20, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(0.40, 0.40, 0.45, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
-
-   love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
-   love.graphics.print(title, x + 10, y + 6)
+   panel.draw(x, y, w, h, title)
 
    local rects: {OptionRect} = {}
    if #opts == 0 then

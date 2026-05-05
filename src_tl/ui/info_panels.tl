@@ -7,17 +7,9 @@ require("effects.effect_types")
 
 local content     = require("content.boons")
 local tile_render = require("ui.tile_render")
+local panel       = require("ui.panel")
 
 local M = {}
-
-local function panel_bg(x: number, y: number, w: number, h: number, title: string)
-   love.graphics.setColor(0.18, 0.18, 0.20, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(0.40, 0.40, 0.45, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
-   love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
-   love.graphics.print(title, x + 8, y + 4)
-end
 
 -- Sorted keys of a string-keyed table — Lua's pairs() does not guarantee
 -- order, and the strip should look stable across frames.
@@ -32,7 +24,7 @@ end
 -- the used_this_deal flag rendered after the label. Sorted by effect_id
 -- for stable order.
 function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
-   panel_bg(x, y, w, h, "Boons")
+   panel.draw(x, y, w, h, "Boons")
 
    local owned: {ActiveEffectState} = {}
    for _, st in pairs(d.effect_states) do
@@ -70,7 +62,7 @@ end
 -- when consumed); we build a one-shot id→Tile map so the per-id lookup
 -- is O(known + wall) instead of O(known × wall).
 function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
-   panel_bg(x, y, w, h, "Known Wall")
+   panel.draw(x, y, w, h, "Known Wall")
 
    local ids = d.players[owner_index].known_wall_tile_ids
    if #ids == 0 then

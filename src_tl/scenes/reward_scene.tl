@@ -9,6 +9,7 @@ require("app.scene_stack")
 
 local scene_stack   = require("app.scene_stack")
 local clickable_mod = require("ui.clickable")
+local button        = require("ui.button")
 -- The "continue" transition goes through scene_stack.fire_back_to_start
 -- so this scene does not statically import start_scene (which would
 -- create a cycle with boon_select_scene → table_scene → reward_scene).
@@ -52,17 +53,8 @@ function M.update(_dt: number)
 end
 
 local function draw_continue_button(y: number)
-   local x, w, h = 40, 220, 36
-   love.graphics.setColor(0.20, 0.32, 0.22, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(0.50, 0.85, 0.55, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
-   love.graphics.setColor(0.92, 1.00, 0.92, 1.0)
-   love.graphics.print("Continue → start", x + 16, y + 10)
-   state.clickables[#state.clickables + 1] = {
-      x = x, y = y, w = w, h = h,
-      callback = function() scene_stack.fire_back_to_start() end,
-   }
+   button.draw("Continue → start", 40, y, 220, 36, 0.50, 0.85, 0.55,
+      state.clickables, function() scene_stack.fire_back_to_start() end)
 end
 
 function M.draw()
