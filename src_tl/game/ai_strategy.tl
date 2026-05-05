@@ -530,16 +530,71 @@ local function tiles_without_id(tiles: {Tile}, tile_id: TileId): {Tile}
    return out
 end
 
+-- discard_priority: returns "how much this tile fights the chosen target."
+-- Higher = drop this tile first. Used as a secondary rank key in
+-- pick_best_discard so that within equal-ting candidates the AI follows
+-- through on its target instead of dropping a structurally adjacent tile by
+-- coincidence of tile-value tiebreak.
+--
+-- The numbers are unitless rank weights — only their ordering matters.
+--
+--   dui_dui_hu  — singletons that aren't seat/round/dragon are pure waste
+--                 (pung-only forbids sequences and won't pair into modifier
+--                 fan). Pairs and triplets are gold; keep.
+--   qing_yi_se  — honors and off-suit tiles are dead in a one-suit-no-honor
+--                 shape; max-suit tiles keep.
+--   hun_yi_se   — off-suit non-honor tiles are dead; honors and max-suit
+--                 tiles keep.
+--   default     — target-blind. Returns 0 so generic ting + tile-value
+--                 ranking takes over (existing behavior).
+local function discard_priority(
+   kind:        TileKindId,
+   count:       integer,
+   target:      TargetKind,
+   features:    HandFeatures,
+   seat_wind:   Wind,
+   round_wind:  Wind
+): integer
+   local k = kind as string
+   local t = target as string
+   local is_honor = HONOR_KINDS[k]
+   local is_dragon = DRAGON_KINDS[k]
+   local is_seat_wind = (k == (seat_wind as string))
+   local is_round_wind = (k == (round_wind as string))
+   local is_value_honor = is_dragon or is_seat_wind or is_round_wind
+   local kind_suit = suit_of(k)
+
+   if t == "dui_dui_hu" then
+      if count >= 2 then return 0 end       -- pair/triplet, keep
+      if is_value_honor then return 30 end  -- could pair into a +1 fan triplet
+      return 100                             -- singleton, sequence-only material
+   elseif t == "qing_yi_se" then
+      if is_honor then return 100 end
+      if kind_suit ~= features.max_suit then return 80 end
+      return 0
+   elseif t == "hun_yi_se" then
+      if is_honor then return 0 end
+      if kind_suit ~= features.max_suit then return 80 end
+      return 0
+   end
+   return 0
+end
+
 -- Rank candidate discards by:
---   1. live ting after discard (asc).
---   2. tile-value of the discarded tile under the chosen target (asc — prefer
---      to drop low-value tiles like terminals/honors for sequence targets).
---   3. tile_id (asc) for determinism.
+--   1. live ting after discard (asc) — never go dead just to satisfy the
+--      target; ting is still primary.
+--   2. discard_priority (desc) — drop high-fight tiles first. This is the
+--      target-aware layer: among equal-ting candidates, follow through on
+--      the chosen target's shape.
+--   3. tile-value of the discarded tile (asc) — prefer to drop low-value
+--      tiles for the target (terminals/honors for sequence targets;
+--      non-yakuhai-honors for triplet targets).
+--   4. tile_id (asc) for determinism.
 --
 -- Ukeire is computed once for the *chosen* candidate (used in reasoning /
 -- inspector display), not per-candidate. Per-candidate ukeire is too
 -- expensive for a 30-kind × 14-candidate inner loop and rarely changes the
--- ranking outcome that ting + tile-value already captures.
+-- ranking outcome that ting + priority + tile-value already captures.
 --
 -- Returns: tile_id, ting_before, ting_after, ukeire_after.
 function M.pick_best_discard(
@@ -553,24 +608,40 @@ function M.pick_best_discard(
    local concealed = p.hand.concealed_tiles
    local before = td.ting_distance_live(concealed, p.hand.sets, live)
 
+   local features = M.compute_features(concealed, p.hand.sets)
+   local counts: {string: integer} = {}
+   for _, t in ipairs(concealed) do
+      local k = t.kind_id as string
+      counts[k] = (counts[k] or 0) + 1
+   end
+
    local best_id: TileId = concealed[1].tile_id
    local best_ting = 1000
+   local best_priority = -1
    local best_value = 1.0e9
 
    for _, t in ipairs(concealed) do
       local rest = tiles_without_id(concealed, t.tile_id)
       local after_ting = td.ting_distance_live(rest, p.hand.sets, live)
       local value = M.tile_value(t.kind_id, target, p.seat_wind, deal.round_wind)
+      local priority = discard_priority(
+         t.kind_id, counts[t.kind_id as string] or 1,
+         target, features, p.seat_wind, deal.round_wind
+      )
 
       local better = false
       if after_ting < best_ting then
          better = true
       elseif after_ting == best_ting then
-         if value < best_value then
+         if priority > best_priority then
             better = true
-         elseif value == best_value then
-            if (t.tile_id as string) < (best_id as string) then
+         elseif priority == best_priority then
+            if value < best_value then
                better = true
+            elseif value == best_value then
+               if (t.tile_id as string) < (best_id as string) then
+                  better = true
+               end
             end
          end
       end
@@ -578,6 +649,7 @@ function M.pick_best_discard(
       if better then
          best_id = t.tile_id
          best_ting = after_ting
+         best_priority = priority
          best_value = value
       end
    end

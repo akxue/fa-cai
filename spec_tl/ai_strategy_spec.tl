@@ -354,6 +354,111 @@ describe("ai_strategy", function()
       end)
    end)
 
+   describe("pick_best_discard (target-aware)", function()
+      it("dui_dui_hu prefers to drop sequence singletons over pair tiles", function()
+         -- Hand: 1 open peng of fa_cai (committed to dui_dui_hu) +
+         -- 9T-9T pair + 3W-3W pair + 4T 5T 6T sequence singletons + 5B.
+         -- Target is dui_dui_hu. Among equal-ting candidates the AI should
+         -- drop a sequence-only singleton (4T/5T/6T/5B), not a pair tile.
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "fa_cai_a" as TileId, kind_id = "fa_cai" as TileKindId },
+                  { tile_id = "fa_cai_b" as TileId, kind_id = "fa_cai" as TileKindId },
+                  { tile_id = "fa_cai_c" as TileId, kind_id = "fa_cai" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local d = make_deal(parse("4t 5t 6t 99t 33w 5b"), sets)
+         -- Maximally permissive live counts so generic ting doesn't dominate.
+         local live: {string: integer} = {}
+         for _, k in ipairs({"tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+            "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
+            "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+            "east","south","west","north","fa_cai","hong_zhong","bai_ban"}) do
+            live[k] = 4
+         end
+         local tid, _b, _a, _u = strategy.pick_best_discard(d, 1, strategy.NEUTRAL_PERSONALITY,
+            "dui_dui_hu" as TargetKind, live)
+         -- The chosen discard's kind must NOT be a paired kind (9t or 3w).
+         local chosen_kind = ""
+         for _, t in ipairs(d.players[1].hand.concealed_tiles) do
+            if t.tile_id == tid then chosen_kind = t.kind_id as string; break end
+         end
+         assert.is_true(chosen_kind ~= "tiao_9" and chosen_kind ~= "wan_3",
+            "expected a singleton drop, got " .. chosen_kind)
+      end)
+
+      it("qing_yi_se prefers to drop honors and off-suit tiles", function()
+         -- Hand: 1 open peng of bing 5; concealed has tiao-suit tiles +
+         -- a couple of honors. Target is qing_yi_se with max_suit=bing.
+         -- The AI should drop a non-bing tile — preferentially an honor
+         -- or off-suit tile — over the bing tile.
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "bing_5_a" as TileId, kind_id = "bing_5" as TileKindId },
+                  { tile_id = "bing_5_b" as TileId, kind_id = "bing_5" as TileKindId },
+                  { tile_id = "bing_5_c" as TileId, kind_id = "bing_5" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local d = make_deal(parse("123b 456b 789b 7b E"), sets)
+         local live: {string: integer} = {}
+         for _, k in ipairs({"tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+            "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
+            "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+            "east","south","west","north","fa_cai","hong_zhong","bai_ban"}) do
+            live[k] = 4
+         end
+         local tid, _b, _a, _u = strategy.pick_best_discard(d, 1, strategy.NEUTRAL_PERSONALITY,
+            "qing_yi_se" as TargetKind, live)
+         local chosen_kind = ""
+         for _, t in ipairs(d.players[1].hand.concealed_tiles) do
+            if t.tile_id == tid then chosen_kind = t.kind_id as string; break end
+         end
+         assert.are.equal("east", chosen_kind, "qing_yi_se should drop the honor first")
+      end)
+
+      it("hun_yi_se keeps honors but drops off-suit non-honors", function()
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "wan_3_a" as TileId, kind_id = "wan_3" as TileKindId },
+                  { tile_id = "wan_3_b" as TileId, kind_id = "wan_3" as TileKindId },
+                  { tile_id = "wan_3_c" as TileId, kind_id = "wan_3" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         -- max_suit will be wan (3 tiles in concealed + 3 in peng = 6 wan).
+         -- Off-suit non-honor (bing) should be dropped; honors should stay.
+         local d = make_deal(parse("123w 456w 5b E E F"), sets)
+         local live: {string: integer} = {}
+         for _, k in ipairs({"tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+            "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
+            "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+            "east","south","west","north","fa_cai","hong_zhong","bai_ban"}) do
+            live[k] = 4
+         end
+         local tid, _b, _a, _u = strategy.pick_best_discard(d, 1, strategy.NEUTRAL_PERSONALITY,
+            "hun_yi_se" as TargetKind, live)
+         local chosen_kind = ""
+         for _, t in ipairs(d.players[1].hand.concealed_tiles) do
+            if t.tile_id == tid then chosen_kind = t.kind_id as string; break end
+         end
+         assert.are.equal("bing_5", chosen_kind, "hun_yi_se should drop off-suit non-honor first")
+      end)
+   end)
+
    describe("has_three_fan_target", function()
       it("returns true for a hand that can reach dui_dui_hu", function()
          local d = make_deal(parse("111t 222w 333b 44b 55b"), {})
