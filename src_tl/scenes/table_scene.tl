@@ -124,6 +124,9 @@ local record SceneState
    conservation_msg: string
    ticks:            integer
    selected_opening_tile_ids: {TileId}
+   -- Most recent AI reasoning per seat (1..4). Populated by advance_one_action
+   -- so the inspector can render the seat's top-K candidate alternatives.
+   last_reason_by_seat: {integer: AiReasoning}
 end
 
 local state: SceneState = nil
@@ -171,6 +174,7 @@ local function reset(seed: integer)
       conservation_msg = "OK",
       ticks            = 0,
       selected_opening_tile_ids = {},
+      last_reason_by_seat = {},
    }
    push_log("sys", "deal opened (seed=" .. tostring(seed) .. ")")
    check_conservation()
@@ -355,6 +359,7 @@ local function advance_one_action(): boolean
       return false
    end
    state.deal = tr.deal
+   state.last_reason_by_seat[seat] = reason
    push_log("ai", describe_reasoning(reason, seat))
    for _, e in ipairs(tr.events) do
       push_log("ev", e.message)
@@ -736,6 +741,34 @@ local function draw_inspector(x: number, y: number, w: number, h: number)
       draw_text(string.format("  p%d %s", seat, ting_label(seat)), tx, ty); ty = ty + 14
       if t == -1 then
          ty = draw_score_candidates_for(seat, tx, ty)
+      end
+   end
+
+   -- AI candidate top-K per seat (S07 candidate-pipeline scaffold). Only the
+   -- discard path produces rich top-3 alternatives in commit 2; calls show a
+   -- single chosen candidate. Later commits expand this as more gates move
+   -- into the candidate pipeline.
+   ty = ty + 6
+   draw_text("AI candidates (last decision):", tx, ty); ty = ty + 16
+   for seat = 1, 4 do
+      local r = state.last_reason_by_seat[seat]
+      if r ~= nil and #r.candidates > 0 then
+         draw_text(string.format("  p%d %s [%s]", seat, r.tag, r.target ~= "" and r.target or "-"), tx, ty); ty = ty + 14
+         for i, c in ipairs(r.candidates) do
+            local label = c.tag
+            if c.tag == "discard" then
+               local da = c.action as DiscardAction
+               label = "discard " .. (da.tile_id as string)
+            end
+            local marker = (i == 1) and "★" or " "
+            local fan = (c.expected_fan >= 0) and tostring(c.expected_fan) or "-"
+            local uke = (c.ukeire_after >= 0) and tostring(c.ukeire_after) or "-"
+            local ting_a = (c.ting_after > -100) and tostring(c.ting_after) or "-"
+            draw_text(string.format("    %s %s ting=%s uke=%s fan=%s", marker, label, ting_a, uke, fan), tx, ty)
+            ty = ty + 14
+         end
+      else
+         draw_text(string.format("  p%d (no decision yet)", seat), tx, ty); ty = ty + 14
       end
    end
 end

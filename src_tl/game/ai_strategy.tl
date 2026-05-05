@@ -16,6 +16,7 @@ require("core.types")
 require("game.deal_types")
 local td        = require("game.ting_distance")
 local fx_runner = require("effects.effect_runner")
+local engine    = require("game.deal_engine")
 
 global type TargetKind = string
 -- "default" | "dui_dui_hu" | "hun_yi_se" | "qing_yi_se"
@@ -23,6 +24,48 @@ global type TargetKind = string
 global record AiPersonality
    target_weights:   {string: number}   -- per-target multiplier; default 1.0
    call_appetite:    number             -- 0..1; how aggressively to call
+end
+
+-- ── CandidateAction (S07 candidate-pipeline scaffold) ────────────────────
+--
+-- One CandidateAction is produced per legal action the AI considers in a
+-- decision (one per concealed tile for discards, one per call gate, one per
+-- chi combination, etc.). The pipeline ranks accepted candidates by
+-- `utility` and the AI picks the top one for its kind.
+--
+-- Fields by purpose:
+--   action               — the DealAction the candidate represents.
+--   tag                  — short kind ("discard" | "peng" | "chi" |
+--                          "open_kong" | "concealed_kong" | "added_kong" |
+--                          "hu_on_discard" | "zi_mo" | "pass").
+--   target_distribution  — per-target weight; populated in T10. In T08 the
+--                          chosen target gets the target's est_fan as its
+--                          weight; other targets are 0.
+--   ting_after, ukeire_after, expected_fan — measured post-action numbers.
+--                          expected_fan is the placeholder est_fan in T08;
+--                          T10 replaces it with Σ P_reach × fan.
+--   visible_depletion    — 0 in T08; populated in T11.
+--   danger               — reserved; 0 in M1 (no defense).
+--   utility              — single ranking number. In T08 the discard
+--                          candidates encode the existing 4-key sort
+--                          (ting asc, priority desc, value asc, id asc) so
+--                          behavior is unchanged. T10 will replace this
+--                          with expected_fan-derived utility.
+--   accepted             — false ⇒ candidate is rejected (still produced
+--                          for inspector display); rejection_reason names
+--                          the gate that rejected it.
+global record CandidateAction
+   action:               DealAction
+   tag:                  string
+   target_distribution:  {string: number}
+   ting_after:           integer
+   ukeire_after:         integer
+   expected_fan:         integer
+   visible_depletion:    number
+   danger:               number
+   utility:              number
+   accepted:             boolean
+   rejection_reason:     string
 end
 
 global record HandFeatures
@@ -57,6 +100,10 @@ local record StrategyModule
    has_three_fan_target:              function(DealState, integer): boolean
    has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
    post_call_ting:                    function({Tile}, {TileSet}, {string: integer}): integer
+   evaluate_discard_candidates:       function(DealState, integer, AiPersonality, TargetKind, {string: integer}): {CandidateAction}
+   enrich_candidate:                  function(DealState, integer, TargetKind, {string: integer}, CandidateAction)
+   rank_candidates:                   function({CandidateAction}): {CandidateAction}
+   top_n_candidates:                  function({CandidateAction}, integer): {CandidateAction}
 end
 
 local M: StrategyModule = {} as StrategyModule
@@ -579,34 +626,36 @@ local function discard_priority(
    return 0
 end
 
--- Rank candidate discards by:
---   1. live ting after discard (asc) — never go dead just to satisfy the
---      target; ting is still primary.
---   2. discard_priority (desc) — drop high-fight tiles first. This is the
---      target-aware layer: among equal-ting candidates, follow through on
---      the chosen target's shape.
+-- Builds one CandidateAction per legal discard. Each candidate carries
+-- structured metrics (ting_after, expected_fan placeholder, target
+-- distribution placeholder) plus a `utility` ranking number that, in
+-- commit 2 of S07, encodes the historical 4-key sort:
+--
+--   1. live ting after discard (asc) — ting is still primary.
+--   2. discard_priority (desc) — among equal-ting candidates, follow
+--      through on the chosen target's shape.
 --   3. tile-value of the discarded tile (asc) — prefer to drop low-value
---      tiles for the target (terminals/honors for sequence targets;
---      non-value honors for triplet targets).
---   4. tile_id (asc) for determinism.
+--      tiles for the target.
+--   4. tile_id (asc, by sorted-position index) for determinism.
 --
--- Ukeire is computed once for the *chosen* candidate (used in reasoning /
--- inspector display), not per-candidate. Per-candidate ukeire is too
--- expensive for a 30-kind × 14-candidate inner loop and rarely changes the
--- ranking outcome that ting + priority + tile-value already captures.
+-- The encoding `-ting*1e9 + priority*1e6 - tile_value*1e3 - id_index` is a
+-- behavior-preserving placeholder so commit 2's harness output matches the
+-- baseline. T10 replaces this with `Σ P_reach(t) × fan(t)` — a meaningful
+-- single-number utility derived from probability × fan.
 --
--- Returns: tile_id, ting_before, ting_after, ukeire_after.
-function M.pick_best_discard(
+-- For perf, expensive per-candidate metrics (ukeire, expected_fan,
+-- target_distribution) are NOT populated here. Call `enrich_candidate` on
+-- the top-K from `rank_candidates` if the inspector or T10 ranking needs
+-- them. This keeps the 14-candidate inner loop cheap.
+function M.evaluate_discard_candidates(
    deal:         DealState,
    player_index: integer,
    _personality: AiPersonality,
    target:       TargetKind,
    live:         {string: integer}
-): TileId, integer, integer, integer
+): {CandidateAction}
    local p = deal.players[player_index]
    local concealed = p.hand.concealed_tiles
-   local before = td.ting_distance_live(concealed, p.hand.sets, live)
-
    local features = M.compute_features(concealed, p.hand.sets)
    local counts: {string: integer} = {}
    for _, t in ipairs(concealed) do
@@ -614,11 +663,15 @@ function M.pick_best_discard(
       counts[k] = (counts[k] or 0) + 1
    end
 
-   local best_id: TileId = concealed[1].tile_id
-   local best_ting = 1000
-   local best_priority = -1
-   local best_value = 1.0e9
+   -- Build a tile_id → sorted-position map so the id-tiebreak term is a
+   -- bounded integer the utility encoding can absorb.
+   local sorted_ids: {string} = {}
+   for _, t in ipairs(concealed) do sorted_ids[#sorted_ids + 1] = t.tile_id as string end
+   table.sort(sorted_ids)
+   local id_index: {string: integer} = {}
+   for i, sid in ipairs(sorted_ids) do id_index[sid] = i end
 
+   local out: {CandidateAction} = {}
    for _, t in ipairs(concealed) do
       local rest = tiles_without_id(concealed, t.tile_id)
       local after_ting = td.ting_distance_live(rest, p.hand.sets, live)
@@ -628,39 +681,91 @@ function M.pick_best_discard(
          target, features, p.seat_wind, deal.round_wind
       )
 
-      local better = false
-      if after_ting < best_ting then
-         better = true
-      elseif after_ting == best_ting then
-         if priority > best_priority then
-            better = true
-         elseif priority == best_priority then
-            if value < best_value then
-               better = true
-            elseif value == best_value then
-               if (t.tile_id as string) < (best_id as string) then
-                  better = true
-               end
-            end
-         end
-      end
+      local utility = -(after_ting as number) * 1e9
+                      + (priority as number) * 1e6
+                      - (value as number) * 1e3
+                      - (id_index[t.tile_id as string] as number)
 
-      if better then
-         best_id = t.tile_id
-         best_ting = after_ting
-         best_priority = priority
-         best_value = value
-      end
+      out[#out + 1] = {
+         action               = engine.discard(player_index, t.tile_id),
+         tag                  = "discard",
+         target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+         ting_after           = after_ting,
+         ukeire_after         = -1,    -- enriched on demand
+         expected_fan         = -1,    -- enriched on demand
+         visible_depletion    = 0.0,
+         danger               = 0.0,
+         utility              = utility,
+         accepted             = true,
+         rejection_reason     = "",
+      }
    end
+   return out
+end
 
-   -- Compute ukeire on the chosen post-discard hand for reasoning display.
-   local rest = tiles_without_id(concealed, best_id)
+-- Populates the expensive per-candidate metrics (ukeire_after,
+-- expected_fan, target_distribution) on a discard candidate. Called for
+-- top-K candidates only. No-op for non-discard candidates (they carry
+-- their metrics from the gate that produced them).
+function M.enrich_candidate(
+   deal:         DealState,
+   player_index: integer,
+   target:       TargetKind,
+   live:         {string: integer},
+   c:            CandidateAction
+)
+   if c.tag ~= "discard" then return end
+   local p = deal.players[player_index]
+   local discard_action = c.action as DiscardAction
+   local rest = tiles_without_id(p.hand.concealed_tiles, discard_action.tile_id)
    local saved = p.hand.concealed_tiles
    p.hand.concealed_tiles = rest
-   local best_uke = M.compute_ukeire(deal, player_index, live)
+   c.expected_fan = M.estimate_fan_for_target(deal, player_index, target)
+   c.ukeire_after = M.compute_ukeire(deal, player_index, live)
    p.hand.concealed_tiles = saved
+   c.target_distribution[target as string] = c.expected_fan as number
+end
 
-   return best_id, before, best_ting, best_uke
+-- Sorts candidates by utility descending. Stable tiebreak by tag, then by
+-- the action's tile_id-ish string when present (kept implicit; ties on
+-- utility are broken by the upstream id_index encoding for discards).
+function M.rank_candidates(cands: {CandidateAction}): {CandidateAction}
+   local out: {CandidateAction} = {}
+   for _, c in ipairs(cands) do out[#out + 1] = c end
+   table.sort(out, function(a: CandidateAction, b: CandidateAction): boolean
+      if a.utility ~= b.utility then return a.utility > b.utility end
+      if a.tag ~= b.tag then return a.tag < b.tag end
+      return false
+   end)
+   return out
+end
+
+-- Returns the first n entries of `cands` (assumes already ranked).
+function M.top_n_candidates(cands: {CandidateAction}, n: integer): {CandidateAction}
+   local out: {CandidateAction} = {}
+   for i = 1, math.min(n, #cands) do out[#out + 1] = cands[i] end
+   return out
+end
+
+-- Backwards-compatible shim used by ai.tl. Delegates to the candidate
+-- pipeline so the chosen tile is the highest-utility CandidateAction's
+-- action. Returns the historical 4-tuple for callers that haven't moved
+-- to the candidate API yet.
+function M.pick_best_discard(
+   deal:         DealState,
+   player_index: integer,
+   personality:  AiPersonality,
+   target:       TargetKind,
+   live:         {string: integer}
+): TileId, integer, integer, integer
+   local p = deal.players[player_index]
+   local before = td.ting_distance_live(p.hand.concealed_tiles, p.hand.sets, live)
+   local cands = M.evaluate_discard_candidates(deal, player_index, personality, target, live)
+   local ranked = M.rank_candidates(cands)
+   local top = ranked[1]
+   M.enrich_candidate(deal, player_index, target, live, top)
+   local discard_action = top.action as DiscardAction
+   return discard_action.tile_id, before, top.ting_after, top.ukeire_after
 end
 
 -- ── Used by ai.tl to gate call/kong decisions ────────────────────────────
