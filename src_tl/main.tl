@@ -74,3 +74,7 @@ end
 function love.keypressed(key: string, _scancode: string, _isrepeat: boolean)
    scene_stack.keypressed(key)
 end
+
+function love.mousepressed(x: number, y: number, button: integer, _istouch: boolean, _presses: integer)
+   scene_stack.mousepressed(x, y, button)
+end

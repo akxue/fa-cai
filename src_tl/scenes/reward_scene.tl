@@ -49,6 +49,9 @@ end
 function M.update(_dt: number)
 end
 
+function M.mousepressed(_x: number, _y: number, _button: integer)
+end
+
 function M.draw()
    love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
    love.graphics.print("Round 1 Won!", 40, 30)

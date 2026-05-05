@@ -33,6 +33,9 @@ end
 function M.update(_dt: number)
 end
 
+function M.mousepressed(_x: number, _y: number, _button: integer)
+end
+
 function M.draw()
    love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
    love.graphics.print("facai", 40, 30)

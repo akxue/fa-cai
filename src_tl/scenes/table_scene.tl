@@ -54,6 +54,14 @@ local record LogEntry
    kind: string   -- "ev" | "ai" | "err" | "sys"
 end
 
+local record HandRowRect
+   tile_id: TileId
+   x:       number
+   y:       number
+   w:       number
+   h:       number
+end
+
 local record SceneState
    seed:             integer
    deal:             DealState
@@ -85,6 +93,9 @@ local record SceneState
    -- One-shot guard so the deal_over → reward/result transition only
    -- fires once per deal.
    transitioned: boolean
+   -- Per-tile rectangles from the most recent draw_player_hand_row, used
+   -- by mousepressed for hit-testing. Rebuilt each draw frame.
+   hand_row_rects: {HandRowRect}
 end
 
 local state: SceneState = nil
@@ -163,6 +174,7 @@ local function reset(seed: integer)
       cursor_tile_id   = "" as TileId,
       run_state        = rs,
       transitioned     = false,
+      hand_row_rects   = {},
    }
    push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. " mode=" .. mode .. ")")
    check_conservation()
@@ -322,13 +334,23 @@ local function seat1_can_react(d: DealState): boolean
    return true
 end
 
+-- Forward declaration so has_seat1_pending_input can ask the option
+-- enumerator whether seat 1 has any reaction beyond Pass; the body is
+-- defined later in the file.
+local compute_seat1_reaction_options: function(d: DealState): {ActionPromptOption}
+
 -- True when run mode and seat 1 must make a decision the AI shouldn't
--- make for them. The auto-advance path stops here.
+-- make for them. The auto-advance path stops here. Skip the pause when
+-- the only legal reaction is Pass — the AI driver auto-passes for
+-- seat 1 in that case so the player isn't bothered.
 local function has_seat1_pending_input(d: DealState): boolean
    if state.mode ~= "run" then return false end
    local phase = d.phase as string
    if phase == "awaiting_action" and d.current_player == 1 then return true end
-   if seat1_can_react(d) then return true end
+   if seat1_can_react(d) then
+      local opts = compute_seat1_reaction_options(d)
+      return #opts > 1
+   end
    return false
 end
 
@@ -378,7 +400,8 @@ local function jump_cursor(slot: integer)
 end
 
 -- Reaction window options for seat 1: Hu/Peng/OpenKong/Chi/Pass.
-local function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
+-- Body for the forward-declared compute_seat1_reaction_options above.
+function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
    local opts: {ActionPromptOption} = {}
    local p = d.players[1]
    local hand = p.hand.concealed_tiles
@@ -636,6 +659,20 @@ function M.update(dt: number)
    if state.step_mode then state.wait_for_step = true end
 end
 
+function M.mousepressed(x: number, y: number, button: integer)
+   if button ~= 1 then return end
+   if state.deal == nil then return end
+   if state.mode ~= "run" then return end
+   local d = state.deal
+   if (d.phase as string) ~= "awaiting_action" or d.current_player ~= 1 then return end
+   for _, r in ipairs(state.hand_row_rects) do
+      if x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h then
+         state.cursor_tile_id = r.tile_id
+         return
+      end
+   end
+end
+
 function M.keypressed(key: string)
    if key == "escape" then
       love.event.quit(0)
@@ -873,6 +910,7 @@ end
 -- Fresh Start swap interaction is legible.
 local function draw_player_hand_row(x: number, y: number, w: number, h: number)
    draw_panel(x, y, w, h, "Your Hand")
+   state.hand_row_rects = {}
    local p = state.deal.players[1]
    local tiles = p.hand.concealed_tiles
    local n = #tiles
@@ -918,6 +956,10 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
          br, bg, bb = 1.00, 0.55, 0.20
       end
       tile_render.draw_tile_box(t, tx, row_y, tile_w, tile_h, fr, fg, fb, br, bg, bb)
+      state.hand_row_rects[#state.hand_row_rects + 1] = {
+         tile_id = t.tile_id,
+         x = tx, y = row_y, w = tile_w, h = tile_h,
+      }
    end
 end
 

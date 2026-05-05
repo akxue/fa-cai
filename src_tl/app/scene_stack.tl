@@ -15,10 +15,11 @@ require("game.deal_types")
 require("game.run_state")
 
 global record Scene
-   load:       function()
-   update:     function(dt: number)
-   draw:       function()
-   keypressed: function(key: string)
+   load:         function()
+   update:       function(dt: number)
+   draw:         function()
+   keypressed:   function(key: string)
+   mousepressed: function(x: number, y: number, button: integer)
 end
 
 local M = {}
@@ -92,6 +93,11 @@ end
 function M.keypressed(key: string)
    local s = stack[#stack]
    if s ~= nil then s.keypressed(key) end
+end
+
+function M.mousepressed(x: number, y: number, button: integer)
+   local s = stack[#stack]
+   if s ~= nil then s.mousepressed(x, y, button) end
 end
 
 return M

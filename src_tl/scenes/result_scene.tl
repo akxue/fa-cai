@@ -45,6 +45,9 @@ end
 function M.update(_dt: number)
 end
 
+function M.mousepressed(_x: number, _y: number, _button: integer)
+end
+
 function M.draw()
    if state.run_state == nil then
       love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
