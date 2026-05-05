@@ -40,43 +40,19 @@ global record AiReasoning
                                     -- pass_reaction with no claim window).
 end
 
-local M = {}
+local record AiModule
+   compute_live_counts: function(DealState, integer): {string: integer}
+   decide_main:         function(DealState, integer): (DealAction, AiReasoning)
+   decide_reaction:     function(DealState, integer): (DealAction, AiReasoning)
+end
+local M: AiModule = {} as AiModule
 
 local PLAYER_COUNT <const> = 4
 local NA <const> = -100
 
--- ── Live-tile bookkeeping ─────────────────────────────────────────────────
--- Returns a `live_counts` map of how many copies of each kind are still
--- drawable from the AI's perspective: 4 minus visible copies in (own
--- concealed, all sets across all players, all discards across all players,
--- pending discard if any). Other players' concealed tiles are intentionally
--- not subtracted — they are not visible to this AI.
-
-local ALL_KINDS: {string} = {
-   "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
-   "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
-   "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
-   "east","south","west","north","fa_cai","hong_zhong","bai_ban",
-}
-
-function M.compute_live_counts(deal: DealState, player_index: integer): {string:integer}
-   local live: {string:integer} = {}
-   for _, k in ipairs(ALL_KINDS) do live[k] = 4 end
-   local function dec(k: TileKindId)
-      local s = k as string
-      live[s] = (live[s] or 0) - 1
-   end
-   for _, t in ipairs(deal.players[player_index].hand.concealed_tiles) do dec(t.kind_id) end
-   for i = 1, PLAYER_COUNT do
-      local p = deal.players[i]
-      for _, s in ipairs(p.hand.sets) do
-         for _, t in ipairs(s.tiles) do dec(t.kind_id) end
-      end
-      for _, t in ipairs(p.hand.discards) do dec(t.kind_id) end
-   end
-   if deal.has_pending_discard then dec(deal.pending_discard.tile.kind_id) end
-   return live
-end
+-- compute_live_counts now lives in ai_strategy.tl. Re-exported at the
+-- bottom of this file so existing callers (table_scene, tests) keep
+-- working through the ai.tl boundary.
 
 -- ── Score-context builder ──────────────────────────────────────────────────
 -- Mirrors deal_engine.build_score_ctx so AI Hu legality matches the engine
@@ -298,8 +274,8 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       end
 
       -- Choose target up front; downstream decisions use it.
-      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
       local live = M.compute_live_counts(deal, player_index)
+      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY, live)
 
       -- Added Kong: strict gate — declare only if a 3-fan target remains
       -- reachable post-kong.
@@ -447,7 +423,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       local discarder = deal.pending_discard.discarder
       local live   = M.compute_live_counts(deal, player_index)
       local before = td.ting_distance_live(concealed, p.hand.sets, live)
-      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
+      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY, live)
       -- Strict gate: accept a call only if the post-call hand still has a
       -- 3-fan-reachable target (using fitness × est_fan via choose_target).
       -- Combined with the realized-modifier logic in estimate_fan_for_target,
@@ -556,5 +532,7 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       "", NA, NA, -1, -1, {}
    )
 end
+
+M.compute_live_counts = strategy.compute_live_counts
 
 return M

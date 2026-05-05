@@ -335,23 +335,144 @@ describe("ai_strategy", function()
       end)
    end)
 
+   describe("visible_depletion (T11)", function()
+      it("returns 0 for default target (no specific tile pool)", function()
+         local d = make_deal(parse("11t 22w 33b 44t 55w 66b 7b"), {})
+         local live = strategy.compute_live_counts(d, 1)
+         local feat = strategy.compute_features(d.players[1].hand.concealed_tiles, {})
+         local dep = strategy.visible_depletion(
+            "default" as TargetKind, feat, live, "east" as Wind, "east" as Wind
+         )
+         assert.are.equal(0.0, dep)
+      end)
+
+      it("rises for qing_yi_se when opponents have committed the dominant suit", function()
+         -- p1 has bing-suit-leaning hand. Compute depletion before and
+         -- after p2 grabs an open peng of bing_5: opponent commitment
+         -- removes 3 bing tiles from the wall, raising depletion.
+         local d_clean = make_deal(parse("123b 456b 9b 99w E S"), {})
+         local live_clean = strategy.compute_live_counts(d_clean, 1)
+         local feat_clean = strategy.compute_features(d_clean.players[1].hand.concealed_tiles, {})
+         local dep_clean = strategy.visible_depletion(
+            "qing_yi_se" as TargetKind, feat_clean, live_clean, "east" as Wind, "east" as Wind
+         )
+
+         local d_committed = make_deal(parse("123b 456b 9b 99w E S"), {})
+         d_committed.players[2].hand.sets = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "bing_5_a" as TileId, kind_id = "bing_5" as TileKindId },
+                  { tile_id = "bing_5_b" as TileId, kind_id = "bing_5" as TileKindId },
+                  { tile_id = "bing_5_c" as TileId, kind_id = "bing_5" as TileKindId },
+               },
+               called_from = 1,
+            },
+         }
+         local live_committed = strategy.compute_live_counts(d_committed, 1)
+         local feat_committed = strategy.compute_features(d_committed.players[1].hand.concealed_tiles, {})
+         local dep_committed = strategy.visible_depletion(
+            "qing_yi_se" as TargetKind, feat_committed, live_committed, "east" as Wind, "east" as Wind
+         )
+
+         assert.is_true(dep_committed > dep_clean,
+            string.format("opponent peng of bing_5 should raise qing_yi_se depletion: clean=%.3f committed=%.3f",
+               dep_clean, dep_committed))
+      end)
+
+      it("rises for hun_yi_se when opponents discard suit + honors", function()
+         local d_clean = make_deal(parse("123b 456b 9b E E S S"), {})
+         local live_clean = strategy.compute_live_counts(d_clean, 1)
+         local feat_clean = strategy.compute_features(d_clean.players[1].hand.concealed_tiles, {})
+         local dep_clean = strategy.visible_depletion(
+            "hun_yi_se" as TargetKind, feat_clean, live_clean, "east" as Wind, "east" as Wind
+         )
+
+         local d_dump = make_deal(parse("123b 456b 9b E E S S"), {})
+         -- p3 dumps bing tiles in their discard pile.
+         d_dump.players[3].hand.discards = {
+            { tile_id = "bing_2_d" as TileId, kind_id = "bing_2" as TileKindId },
+            { tile_id = "bing_5_a" as TileId, kind_id = "bing_5" as TileKindId },
+            { tile_id = "bing_5_b" as TileId, kind_id = "bing_5" as TileKindId },
+            { tile_id = "bing_8_a" as TileId, kind_id = "bing_8" as TileKindId },
+         }
+         local live_dump = strategy.compute_live_counts(d_dump, 1)
+         local feat_dump = strategy.compute_features(d_dump.players[1].hand.concealed_tiles, {})
+         local dep_dump = strategy.visible_depletion(
+            "hun_yi_se" as TargetKind, feat_dump, live_dump, "east" as Wind, "east" as Wind
+         )
+
+         assert.is_true(dep_dump > dep_clean,
+            "discards in the dominant suit should raise hun_yi_se depletion")
+      end)
+   end)
+
+   describe("expected_fan_dist (T10)", function()
+      it("downgrades qing_yi_se relative to dui_dui_hu when opponents commit the suit", function()
+         -- Pair-heavy hand with leaning toward bing. Without opponent
+         -- pressure, qing_yi_se is a real path (6 fan). After p2 commits
+         -- a bing peng, qing_yi_se's contribution drops sharply while
+         -- dui_dui_hu's contribution stays robust.
+         local d_clean = make_deal(parse("11b 22b 33b 44t 55w F F"), {})
+         local live_clean = strategy.compute_live_counts(d_clean, 1)
+         local _dist_clean, _total_clean, dom_clean = strategy.expected_fan_dist(d_clean, 1, live_clean)
+
+         local d_pressure = make_deal(parse("11b 22b 33b 44t 55w F F"), {})
+         d_pressure.players[2].hand.sets = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "bing_7_a" as TileId, kind_id = "bing_7" as TileKindId },
+                  { tile_id = "bing_7_b" as TileId, kind_id = "bing_7" as TileKindId },
+                  { tile_id = "bing_7_c" as TileId, kind_id = "bing_7" as TileKindId },
+               },
+               called_from = 1,
+            },
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "bing_8_a" as TileId, kind_id = "bing_8" as TileKindId },
+                  { tile_id = "bing_8_b" as TileId, kind_id = "bing_8" as TileKindId },
+                  { tile_id = "bing_8_c" as TileId, kind_id = "bing_8" as TileKindId },
+               },
+               called_from = 1,
+            },
+         }
+         local live_pressure = strategy.compute_live_counts(d_pressure, 1)
+         local dist_pressure, _total_pressure, dom_pressure = strategy.expected_fan_dist(d_pressure, 1, live_pressure)
+
+         -- After heavy bing commitment by an opponent, the dominant
+         -- target should not still be qing_yi_se (its pool is depleted).
+         assert.is_true(dom_clean as string ~= "qing_yi_se" or dom_pressure as string ~= "qing_yi_se",
+            "expected at least one of clean/pressure to step away from qing_yi_se under depletion pressure")
+         assert.is_true(dist_pressure["dui_dui_hu"] >= dist_pressure["qing_yi_se"],
+            "with opponent bing commitment, dui_dui_hu should be at least as attractive as qing_yi_se")
+      end)
+   end)
+
    describe("choose_target", function()
       it("picks dui_dui_hu when the hand is pair-heavy", function()
          local d = make_deal(parse("111t 222w 333b 44b 55b"), {})
-         local target, est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY)
+         local live = strategy.compute_live_counts(d, 1)
+         local target, est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY, live)
          assert.are.equal("dui_dui_hu", target as string)
          assert.is_true(est >= 3)
       end)
 
       it("picks qing_yi_se when hand is single-suit-heavy with no honors", function()
          local d = make_deal(parse("123t 456t 789t 23t 99t"), {})
-         local target, _est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY)
+         local live = strategy.compute_live_counts(d, 1)
+         local target, _est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY, live)
          assert.are.equal("qing_yi_se", target as string)
       end)
 
       it("picks hun_yi_se when hand is single-suit + honors", function()
          local d = make_deal(parse("123t 456t 789t E E F F"), {})
-         local target, _est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY)
+         local live = strategy.compute_live_counts(d, 1)
+         local target, _est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY, live)
          assert.are.equal("hun_yi_se", target as string)
       end)
 
@@ -360,27 +481,10 @@ describe("ai_strategy", function()
          -- weak pair structure. No single target shape fits well, so the
          -- baseline (default) wins.
          local d = make_deal(parse("1t 4w 7b 2t 5w 8b 3t 6w 9b 23t E S"), {})
-         local target, est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY)
+         local live = strategy.compute_live_counts(d, 1)
+         local target, est = strategy.choose_target(d, 1, strategy.NEUTRAL_PERSONALITY, live)
          assert.are.equal("default", target as string)
          assert.is_true(est >= 1)   -- ping hu base
-      end)
-   end)
-
-   describe("tile_value", function()
-      it("scores middle suited tiles higher for sequence targets", function()
-         local mid = strategy.tile_value("tiao_5" as TileKindId, "default" as TargetKind, "east" as Wind, "east" as Wind)
-         local terminal = strategy.tile_value("tiao_1" as TileKindId, "default" as TargetKind, "east" as Wind, "east" as Wind)
-         local honor = strategy.tile_value("east" as TileKindId, "default" as TargetKind, "east" as Wind, "east" as Wind)
-         assert.is_true(mid > terminal)
-         assert.is_true(terminal > honor)
-      end)
-
-      it("scores honors high for triplet targets, with seat/round wind boost", function()
-         local dragon = strategy.tile_value("fa_cai" as TileKindId, "dui_dui_hu" as TargetKind, "east" as Wind, "east" as Wind)
-         local seat_wind = strategy.tile_value("east" as TileKindId, "dui_dui_hu" as TargetKind, "east" as Wind, "south" as Wind)
-         local generic_honor = strategy.tile_value("west" as TileKindId, "dui_dui_hu" as TargetKind, "east" as Wind, "south" as Wind)
-         assert.is_true(dragon >= 4)
-         assert.is_true(seat_wind > generic_honor)   -- seat wind gets +1
       end)
    end)
 
@@ -492,17 +596,16 @@ describe("ai_strategy", function()
    describe("has_three_fan_target", function()
       it("returns true for a hand that can reach dui_dui_hu", function()
          local d = make_deal(parse("111t 222w 333b 44b 55b"), {})
-         assert.is_true(strategy.has_three_fan_target(d, 1))
+         local live = strategy.compute_live_counts(d, 1)
+         assert.is_true(strategy.has_three_fan_target(d, 1, live))
       end)
 
       it("returns true via default fallback when no strong target", function()
-         -- Default's est_fan is base 1 + men_qian 1 = 2, below 3. But choose_target
-         -- gates differently from has_three_fan_target — the latter checks all
-         -- targets; even a junk hand could reach hun_yi_se / dui_dui_hu / qing_yi_se
-         -- in principle. This test pins the contract: a hand with at least *some*
-         -- structure should pass.
+         -- A hand with at least some structure should reach a 3-fan target
+         -- through one of the four target paths.
          local d = make_deal(parse("11t 22w 33b 44t 55w 66b 7b"), {})
-         assert.is_true(strategy.has_three_fan_target(d, 1))
+         local live = strategy.compute_live_counts(d, 1)
+         assert.is_true(strategy.has_three_fan_target(d, 1, live))
       end)
    end)
 end)

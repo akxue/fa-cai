@@ -26,7 +26,7 @@ global record AiPersonality
    call_appetite:    number             -- 0..1; how aggressively to call
 end
 
--- ── CandidateAction (S07 candidate-pipeline scaffold) ────────────────────
+-- ── CandidateAction (S07 candidate-pipeline) ────────────────────────────
 --
 -- One CandidateAction is produced per legal action the AI considers in a
 -- decision (one per concealed tile for discards, one per call gate, one per
@@ -38,19 +38,20 @@ end
 --   tag                  — short kind ("discard" | "peng" | "chi" |
 --                          "open_kong" | "concealed_kong" | "added_kong" |
 --                          "hu_on_discard" | "zi_mo" | "pass").
---   target_distribution  — per-target weight; populated in T10. In T08 the
---                          chosen target gets the target's est_fan as its
---                          weight; other targets are 0.
---   ting_after, ukeire_after, expected_fan — measured post-action numbers.
---                          expected_fan is the placeholder est_fan in T08;
---                          T10 replaces it with Σ P_reach × fan.
---   visible_depletion    — 0 in T08; populated in T11.
+--   target_distribution  — per-target contribution to expected_fan. Sums to
+--                          expected_fan. The "chosen target" for inspector
+--                          display is the target with the largest entry.
+--   ting_after, ukeire_after — post-action ting / ukeire numbers.
+--   expected_fan         — Σ_t P_reach(t | hand_after) × fan(t), the
+--                          probability-weighted fan ceiling. Drives utility
+--                          for ranking.
+--   visible_depletion    — fraction of the chosen target's relevant tile
+--                          pool that is publicly consumed (0..1). Populated
+--                          on the chosen-target slot for inspector display.
 --   danger               — reserved; 0 in M1 (no defense).
---   utility              — single ranking number. In T08 the discard
---                          candidates encode the existing 4-key sort
---                          (ting asc, priority desc, value asc, id asc) so
---                          behavior is unchanged. T10 will replace this
---                          with expected_fan-derived utility.
+--   utility              — single ranking number = expected_fan. Tiebreaks
+--                          (ukeire desc, ting asc, id asc) live in
+--                          rank_candidates' comparator.
 --   accepted             — false ⇒ candidate is rejected (still produced
 --                          for inspector display); rejection_reason names
 --                          the gate that rejected it.
@@ -60,7 +61,7 @@ global record CandidateAction
    target_distribution:  {string: number}
    ting_after:           integer
    ukeire_after:         integer
-   expected_fan:         integer
+   expected_fan:         number
    visible_depletion:    number
    danger:               number
    utility:              number
@@ -89,15 +90,17 @@ end
 
 local record StrategyModule
    NEUTRAL_PERSONALITY: AiPersonality
+   compute_live_counts:               function(DealState, integer): {string: integer}
    compute_features:                  function({Tile}, {TileSet}): HandFeatures
-   tile_value:                        function(TileKindId, TargetKind, Wind, Wind): number
    estimate_fan_for_target:           function(DealState, integer, TargetKind): integer
-   choose_target:                     function(DealState, integer, AiPersonality): (TargetKind, integer)
+   choose_target:                     function(DealState, integer, AiPersonality, {string: integer}): (TargetKind, integer)
+   visible_depletion:                 function(TargetKind, HandFeatures, {string: integer}, Wind, Wind): number
+   expected_fan_dist:                 function(DealState, integer, {string: integer}): ({string: number}, number, TargetKind)
    compute_ukeire:                    function(DealState, integer, {string: integer}): integer
    pick_best_discard:                 function(DealState, integer, AiPersonality, TargetKind, {string: integer}): (TileId, integer, integer, integer)
    max_est_fan:                       function(DealState, integer): integer
    max_est_fan_hypothetical:          function(DealState, integer, {Tile}, {TileSet}): integer
-   has_three_fan_target:              function(DealState, integer): boolean
+   has_three_fan_target:              function(DealState, integer, {string: integer}): boolean
    has_three_fan_target_hypothetical: function(DealState, integer, {Tile}, {TileSet}): boolean
    post_call_ting:                    function({Tile}, {TileSet}, {string: integer}): integer
    evaluate_discard_candidates:       function(DealState, integer, AiPersonality, TargetKind, {string: integer}): {CandidateAction}
@@ -118,6 +121,41 @@ M.NEUTRAL_PERSONALITY = {
    call_appetite = 0.5,
 }
 
+-- ── Live-tile bookkeeping ─────────────────────────────────────────────────
+-- Returns a `live_counts` map of how many copies of each kind are still
+-- drawable from the AI's perspective: 4 minus visible copies in (own
+-- concealed, all sets across all players, all discards across all players,
+-- pending discard if any). Other players' concealed tiles are intentionally
+-- not subtracted — they are not visible to this AI.
+
+local ALL_KINDS: {string} = {
+   "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+   "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
+   "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+   "east","south","west","north","fa_cai","hong_zhong","bai_ban",
+}
+
+local PLAYER_COUNT <const> = 4
+
+function M.compute_live_counts(deal: DealState, player_index: integer): {string: integer}
+   local live: {string: integer} = {}
+   for _, k in ipairs(ALL_KINDS) do live[k] = 4 end
+   local function dec(k: TileKindId)
+      local s = k as string
+      live[s] = (live[s] or 0) - 1
+   end
+   for _, t in ipairs(deal.players[player_index].hand.concealed_tiles) do dec(t.kind_id) end
+   for i = 1, PLAYER_COUNT do
+      local p = deal.players[i]
+      for _, s in ipairs(p.hand.sets) do
+         for _, t in ipairs(s.tiles) do dec(t.kind_id) end
+      end
+      for _, t in ipairs(p.hand.discards) do dec(t.kind_id) end
+   end
+   if deal.has_pending_discard then dec(deal.pending_discard.tile.kind_id) end
+   return live
+end
+
 -- ── Constants ─────────────────────────────────────────────────────────────
 
 local HONOR_KINDS: {string: boolean} = {
@@ -128,46 +166,6 @@ local HONOR_KINDS: {string: boolean} = {
 local DRAGON_KINDS: {string: boolean} = {
    fa_cai = true, hong_zhong = true, bai_ban = true,
 }
-
--- ── Tile-value tables (tiebreakers when ting and ukeire tie) ──────────────
-
--- sequence_value: prefers middle suited tiles for chi-building.
--- terminal=1, edge(2,8)=2, near(3,7)=3, mid(4,5,6)=4, honors=0
-local SEQUENCE_VALUE: {string: number} = {
-   tiao_1 = 1, tiao_9 = 1, wan_1 = 1, wan_9 = 1, bing_1 = 1, bing_9 = 1,
-   tiao_2 = 2, tiao_8 = 2, wan_2 = 2, wan_8 = 2, bing_2 = 2, bing_8 = 2,
-   tiao_3 = 3, tiao_7 = 3, wan_3 = 3, wan_7 = 3, bing_3 = 3, bing_7 = 3,
-   tiao_4 = 4, tiao_5 = 4, tiao_6 = 4,
-   wan_4 = 4, wan_5 = 4, wan_6 = 4,
-   bing_4 = 4, bing_5 = 4, bing_6 = 4,
-   east = 0, south = 0, west = 0, north = 0,
-   fa_cai = 0, hong_zhong = 0, bai_ban = 0,
-}
-
--- triplet_value: prefers honors and dragons for peng-building.
--- non-value honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4 (computed)
-local TRIPLET_VALUE: {string: number} = {
-   tiao_1 = 2, tiao_9 = 2, wan_1 = 2, wan_9 = 2, bing_1 = 2, bing_9 = 2,
-   tiao_2 = 3, tiao_3 = 3, tiao_4 = 3, tiao_5 = 3, tiao_6 = 3, tiao_7 = 3, tiao_8 = 3,
-   wan_2 = 3, wan_3 = 3, wan_4 = 3, wan_5 = 3, wan_6 = 3, wan_7 = 3, wan_8 = 3,
-   bing_2 = 3, bing_3 = 3, bing_4 = 3, bing_5 = 3, bing_6 = 3, bing_7 = 3, bing_8 = 3,
-   east = 1, south = 1, west = 1, north = 1,
-   fa_cai = 4, hong_zhong = 4, bai_ban = 4,
-}
-
--- Tile-value lookup for a target. Sequence-leaning targets use SEQUENCE_VALUE;
--- triplet-leaning use TRIPLET_VALUE. seat/round wind get +1 in triplet table.
-function M.tile_value(kind_id: TileKindId, target: TargetKind, seat_wind: Wind, round_wind: Wind): number
-   local key = kind_id as string
-   if (target as string) == "dui_dui_hu" then
-      local v = TRIPLET_VALUE[key] or 0
-      if key == (seat_wind as string) or key == (round_wind as string) then
-         v = v + 1
-      end
-      return v
-   end
-   return SEQUENCE_VALUE[key] or 0
-end
 
 -- ── Composition features ───────────────────────────────────────────────────
 
@@ -240,7 +238,12 @@ function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
       end
    end
 
-   for s, n in pairs(suit_counts) do
+   -- Iterate in fixed order so ties produce a deterministic max_suit. Lua's
+   -- pairs() does not guarantee iteration order across runs, which would
+   -- make the AI non-deterministic when two suits tie on count.
+   local SUIT_ORDER: {string} = { "tiao", "wan", "bing" }
+   for _, s in ipairs(SUIT_ORDER) do
+      local n = suit_counts[s] or 0
       if n > max_suit_count then
          max_suit = s
          max_suit_count = n
@@ -248,7 +251,8 @@ function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
    end
 
    local off_suit = 0
-   for s, n in pairs(suit_counts) do
+   for _, s in ipairs(SUIT_ORDER) do
+      local n = suit_counts[s] or 0
       if s ~= max_suit then off_suit = off_suit + n end
    end
 
@@ -423,8 +427,12 @@ function M.estimate_fan_for_target(deal: DealState, player_index: integer, targe
       local k = t.kind_id as string
       counts[k] = (counts[k] or 0) + 1
    end
-   for k, n in pairs(counts) do
-      if n >= 2 then pair_kind = k as TileKindId; break end
+   -- Iterate kinds in fixed order so pair_kind is deterministic across
+   -- runs. This feeds synthetic_shape and the score-context incoming tile;
+   -- boon modules that look up by kind would otherwise see a non-stable
+   -- pair_kind from pairs() iteration order.
+   for _, k in ipairs(ALL_KINDS) do
+      if (counts[k] or 0) >= 2 then pair_kind = k as TileKindId; break end
    end
 
    local shape = synthetic_shape(target, p.hand.sets, pair_kind)
@@ -473,63 +481,219 @@ function M.estimate_fan_for_target(deal: DealState, player_index: integer, targe
    return final.total_fan
 end
 
--- ── Target selection ──────────────────────────────────────────────────────
+-- ── Visible depletion (S07 commit 3) ─────────────────────────────────────
+--
+-- visible_depletion returns the fraction (0..1) of a target's relevant tile
+-- pool that is publicly consumed (own concealed + everyone's open sets +
+-- everyone's discards). Higher depletion ⇒ less wall to draw from for that
+-- target. Computed from `live` directly since live[k] = 4 - (own_concealed
+-- + opens + discards).
+--
+-- Pool by target:
+--   default      — empty pool, depletion always 0 (no specific tile need).
+--   dui_dui_hu   — kinds the player already has ≥2 of (pair candidates),
+--                  plus dragons + seat wind + round wind (pung material).
+--                  Pool size = 4 × |pool|.
+--   hun_yi_se    — dominant suit (9 kinds × 4) + all honors (7 × 4) = 64.
+--   qing_yi_se   — dominant suit only (9 × 4) = 36.
+--
+-- The dominant suit is feat.max_suit (already computed by compute_features
+-- on the post-action hand).
+local SUITS: {string} = { "tiao", "wan", "bing" }
+local SUIT_KINDS: {string: {string}} = {
+   tiao = { "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9" },
+   wan  = { "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9" },
+   bing = { "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9" },
+}
+local HONOR_LIST: {string} = { "east", "south", "west", "north", "fa_cai", "hong_zhong", "bai_ban" }
 
--- Computes a per-target fitness score from features. Higher = better fit.
--- Tuned so:
---   - qing_yi_se beats hun_yi_se when no honors are present.
---   - hun_yi_se beats qing_yi_se when honors are present.
---   - default is a baseline that wins for genuinely mixed hands.
-local function target_fitness(target: TargetKind, f: HandFeatures): number
+function M.visible_depletion(
+   target:    TargetKind,
+   feat:      HandFeatures,
+   live:      {string: integer},
+   seat_wind: Wind,
+   round_wind: Wind
+): number
    local t = target as string
-   if t == "dui_dui_hu" then
-      -- Fits when many pairs/triplets, few sequences.
-      return (f.pair_count * 2.0) + (f.triplet_count * 3.0) + (f.honor_pairs * 1.0)
-   elseif t == "qing_yi_se" then
-      -- Fits when one suit dominates and zero honors. Heavy honor penalty
-      -- because qing_yi_se forbids honors entirely.
-      return (f.max_suit_count * 1.0) - (f.off_suit_count * 0.5) - (f.honor_count * 2.0)
+   local pool: {string} = {}
+
+   if t == "qing_yi_se" then
+      if feat.max_suit == "" then return 0.0 end
+      for _, k in ipairs(SUIT_KINDS[feat.max_suit]) do pool[#pool + 1] = k end
    elseif t == "hun_yi_se" then
-      -- Fits when one suit dominates AND honors are present. The 0.7
-      -- multiplier on max_suit_count means hun_yi_se needs honors to beat
-      -- qing_yi_se's pure suit fitness.
-      return (f.max_suit_count * 0.7) + (f.honor_count * 1.0) - (f.off_suit_count * 0.5)
-   else   -- default
-      -- Universally feasible; modest baseline so it wins for genuinely
-      -- mixed hands with no strong shape signal.
-      return 6.0
+      if feat.max_suit == "" then
+         -- No dominant suit yet — pool is all suits + honors which is the
+         -- whole wall. Depletion would be misleading; return 0.
+         return 0.0
+      end
+      for _, k in ipairs(SUIT_KINDS[feat.max_suit]) do pool[#pool + 1] = k end
+      for _, k in ipairs(HONOR_LIST) do pool[#pool + 1] = k end
+   elseif t == "dui_dui_hu" then
+      -- Pool = pung-material kinds: dragons + seat wind + round wind +
+      -- whatever the player already pairs (the pair candidates that could
+      -- form a third copy). Falls back to all 34 kinds if the player has
+      -- no pair commitments yet (early-deal hands).
+      local seen: {string: boolean} = {}
+      for _, k in ipairs(HONOR_LIST) do
+         if DRAGON_KINDS[k] or k == (seat_wind as string) or k == (round_wind as string) then
+            if not seen[k] then seen[k] = true; pool[#pool + 1] = k end
+         end
+      end
+      -- Pair candidates: kinds in concealed with ≥2 copies (we don't have
+      -- the post-discard hand here, but live carries the public state, so
+      -- this is approximated through the live count: kinds where live[k]
+      -- ≥ 2 are still grow-able).
+      for _, k in ipairs(HONOR_LIST) do
+         if not seen[k] and (live[k] or 0) >= 2 then
+            seen[k] = true; pool[#pool + 1] = k
+         end
+      end
+      for _, suit in ipairs(SUITS) do
+         for _, k in ipairs(SUIT_KINDS[suit]) do
+            if not seen[k] and (live[k] or 0) >= 2 then
+               seen[k] = true; pool[#pool + 1] = k
+            end
+         end
+      end
+      if #pool == 0 then return 0.0 end
+   else
+      return 0.0
    end
+
+   local total = 4 * #pool
+   if total == 0 then return 0.0 end
+   local remaining = 0
+   for _, k in ipairs(pool) do remaining = remaining + (live[k] or 0) end
+   local consumed = total - remaining
+   if consumed < 0 then consumed = 0 end
+   return consumed / total
 end
 
+-- ── Expected-fan distribution (S07 commit 3) ─────────────────────────────
+--
+-- For each target, computes:
+--   feasible(t) ∈ {0, 1}   — same gates as estimate_fan_for_target
+--   ting_t                 — post-action ting distance (target-blind first
+--                            cut; future iteration adds target-specific
+--                            shape ting)
+--   depletion_t            — visible_depletion(t)
+--   fan_t                  — estimate_fan_for_target(t) (post-action hand)
+--   p_reach(t)             = feasible × 1 / (ting_t + 1)² × (1 - depletion)
+--   contribution_t         = p_reach(t) × fan_t
+--
+-- Returns: (target_distribution: {t → contribution}, expected_fan: total,
+-- dominant_target: argmax). The caller reads p.hand AFTER setting it to
+-- the post-action hand (matching enrich_candidate's pattern).
 local TARGETS: {TargetKind} = {
    "default" as TargetKind, "dui_dui_hu" as TargetKind,
    "hun_yi_se" as TargetKind, "qing_yi_se" as TargetKind,
 }
 
--- Picks a target: highest (fitness * weight) among those with est_fan ≥ 3.
--- Falls through to "default" if every other target fails the fan filter.
-function M.choose_target(deal: DealState, player_index: integer, personality: AiPersonality): TargetKind, integer
-   local p = deal.players[player_index]
-   local f = M.compute_features(p.hand.concealed_tiles, p.hand.sets)
+local function target_feasible(target: TargetKind, feat: HandFeatures): boolean
+   local t = target as string
+   if t == "dui_dui_hu" then
+      return feat.open_chi_count == 0
+   elseif t == "qing_yi_se" then
+      return (not feat.has_committed_honor) and #feat.committed_suits <= 1
+   elseif t == "hun_yi_se" then
+      return #feat.committed_suits <= 1
+   end
+   return true   -- default
+end
 
-   local best: TargetKind = "default" as TargetKind
-   local best_score = -1.0e9
-   local best_est_fan = 0
+-- target_misfit(t) returns an additional ting-distance penalty representing
+-- "off-target tiles in the hand that would need to be discarded." Standard
+-- ting captures progress toward a generic win shape but doesn't penalize
+-- tiles the target forbids. Without this, qing_yi_se looks great on a hand
+-- full of honors (high standard fan, low standard ting) when in fact all
+-- those honors must be thrown away.
+--
+-- First-cut heuristic; iterate per harness data:
+--   default     — 0
+--   dui_dui_hu  — 2 × max(0, 4 - (pair_count + triplet_count)). A pair-heavy
+--                 hand with 5+ pair-or-triplet kinds is at low penalty;
+--                 sequence-heavy hands take a hit.
+--   qing_yi_se  — 2 × (honor_count + off_suit_count). Heavy because every
+--                 non-pure-suit tile is a throwaway.
+--   hun_yi_se   — 2 × off_suit_count. Honors are kept; only off-suit
+--                 non-honors are dead weight.
+local function target_misfit(target: TargetKind, feat: HandFeatures): number
+   local t = target as string
+   if t == "qing_yi_se" then
+      return 2.0 * ((feat.honor_count + feat.off_suit_count) as number)
+   elseif t == "hun_yi_se" then
+      return 2.0 * (feat.off_suit_count as number)
+   elseif t == "dui_dui_hu" then
+      local groups = feat.pair_count   -- includes triplets (counted by ≥2)
+      local short = 4 - groups
+      if short < 0 then short = 0 end
+      return 2.0 * (short as number)
+   end
+   return 0.0
+end
+
+function M.expected_fan_dist(
+   deal:         DealState,
+   player_index: integer,
+   live:         {string: integer}
+): {string: number}, number, TargetKind
+   local p    = deal.players[player_index]
+   local feat = M.compute_features(p.hand.concealed_tiles, p.hand.sets)
+   local ting = td.ting_distance_live(p.hand.concealed_tiles, p.hand.sets, live)
+   -- Clamp to [0, 100]. ting can return -1 for seven_pairs "almost there"
+   -- offsets; clamp negatives to 0 so 1/(ting+1)² is finite. Clamp the
+   -- dead-hand sentinel (≥100) to 100 so depleted shapes still get a
+   -- (vanishingly small) non-zero probability rather than a divide-by-zero.
+   if ting < 0 then ting = 0 end
+   if ting >= 100 then ting = 100 end
+
+   local dist: {string: number} = {
+      default     = 0.0,
+      dui_dui_hu  = 0.0,
+      hun_yi_se   = 0.0,
+      qing_yi_se  = 0.0,
+   }
+   local total: number = 0.0
+   local best_t: TargetKind = "default" as TargetKind
+   local best_c: number = -1.0
 
    for _, t in ipairs(TARGETS) do
-      local est_fan = M.estimate_fan_for_target(deal, player_index, t)
-      if est_fan >= 3 or (t as string) == "default" then
-         local fit = target_fitness(t, f)
-         local weight = personality.target_weights[t as string] or 1.0
-         local score = fit * weight
-         if score > best_score then
-            best = t
-            best_score = score
-            best_est_fan = est_fan
+      local contribution: number = 0.0
+      if target_feasible(t, feat) then
+         local fan_t = M.estimate_fan_for_target(deal, player_index, t)
+         if fan_t > 0 then
+            local depletion = M.visible_depletion(t, feat, live, p.seat_wind, deal.round_wind)
+            local effective_ting = (ting as number) + target_misfit(t, feat)
+            local denom = (effective_ting + 1.0) * (effective_ting + 1.0)
+            local p_reach = (1.0 - depletion) / denom
+            contribution = p_reach * (fan_t as number)
          end
       end
+      dist[t as string] = contribution
+      total = total + contribution
+      if contribution > best_c then
+         best_c = contribution
+         best_t = t
+      end
    end
-   return best, best_est_fan
+   return dist, total, best_t
+end
+
+-- ── Target selection ──────────────────────────────────────────────────────
+
+-- Picks the target whose expected-fan contribution is highest on the
+-- player's current (pre-action) hand. The chosen target is informational —
+-- it surfaces in the inspector and the AiReasoning log. The candidate
+-- pipeline ranks by full target_distribution, not just the chosen target.
+function M.choose_target(
+   deal:         DealState,
+   player_index: integer,
+   _personality: AiPersonality,
+   live:         {string: integer}
+): TargetKind, integer
+   local _dist, _total, dominant = M.expected_fan_dist(deal, player_index, live)
+   local est_fan = M.estimate_fan_for_target(deal, player_index, dominant)
+   return dominant, est_fan
 end
 
 -- ── Ukeire ────────────────────────────────────────────────────────────────
@@ -576,95 +740,27 @@ local function tiles_without_id(tiles: {Tile}, tile_id: TileId): {Tile}
    return out
 end
 
--- discard_priority: returns "how much this tile fights the chosen target."
--- Higher = drop this tile first. Used as a secondary rank key in
--- pick_best_discard so that within equal-ting candidates the AI follows
--- through on its target instead of dropping a structurally adjacent tile by
--- coincidence of tile-value tiebreak.
+-- Builds one CandidateAction per legal discard. Each candidate's utility
+-- is its expected_fan = Σ_t [P_reach(t | hand_after) × fan(t)] across all
+-- four targets. The candidate also carries its full target_distribution
+-- (per-target contribution to expected_fan) for inspector display and
+-- downstream "AI picked X for the dui_dui_hu reason" logic.
 --
--- The numbers are unitless rank weights — only their ordering matters.
---
---   dui_dui_hu  — singletons that aren't seat/round/dragon are pure waste
---                 (pung-only forbids sequences and won't pair into modifier
---                 fan). Pairs and triplets are gold; keep.
---   qing_yi_se  — honors and off-suit tiles are dead in a one-suit-no-honor
---                 shape; max-suit tiles keep.
---   hun_yi_se   — off-suit non-honor tiles are dead; honors and max-suit
---                 tiles keep.
---   default     — target-blind. Returns 0 so generic ting + tile-value
---                 ranking takes over (existing behavior).
-local function discard_priority(
-   kind:        TileKindId,
-   count:       integer,
-   target:      TargetKind,
-   features:    HandFeatures,
-   seat_wind:   Wind,
-   round_wind:  Wind
-): integer
-   local k = kind as string
-   local t = target as string
-   local is_honor = HONOR_KINDS[k]
-   local is_dragon = DRAGON_KINDS[k]
-   local is_seat_wind = (k == (seat_wind as string))
-   local is_round_wind = (k == (round_wind as string))
-   local is_value_honor = is_dragon or is_seat_wind or is_round_wind
-   local kind_suit = suit_of(k)
-
-   if t == "dui_dui_hu" then
-      if count >= 2 then return 0 end       -- pair/triplet, keep
-      if is_value_honor then return 30 end  -- could pair into a +1 fan triplet
-      return 100                             -- singleton, sequence-only material
-   elseif t == "qing_yi_se" then
-      if is_honor then return 100 end
-      if kind_suit ~= features.max_suit then return 80 end
-      return 0
-   elseif t == "hun_yi_se" then
-      if is_honor then return 0 end
-      if kind_suit ~= features.max_suit then return 80 end
-      return 0
-   end
-   return 0
-end
-
--- Builds one CandidateAction per legal discard. Each candidate carries
--- structured metrics (ting_after, expected_fan placeholder, target
--- distribution placeholder) plus a `utility` ranking number that, in
--- commit 2 of S07, encodes the historical 4-key sort:
---
---   1. live ting after discard (asc) — ting is still primary.
---   2. discard_priority (desc) — among equal-ting candidates, follow
---      through on the chosen target's shape.
---   3. tile-value of the discarded tile (asc) — prefer to drop low-value
---      tiles for the target.
---   4. tile_id (asc, by sorted-position index) for determinism.
---
--- The encoding `-ting*1e9 + priority*1e6 - tile_value*1e3 - id_index` is a
--- behavior-preserving placeholder so commit 2's harness output matches the
--- baseline. T10 replaces this with `Σ P_reach(t) × fan(t)` — a meaningful
--- single-number utility derived from probability × fan.
---
--- For perf, expensive per-candidate metrics (ukeire, expected_fan,
--- target_distribution) are NOT populated here. Call `enrich_candidate` on
--- the top-K from `rank_candidates` if the inspector or T10 ranking needs
--- them. This keeps the 14-candidate inner loop cheap.
+-- Cost: per candidate, expected_fan_dist runs ting_distance + 4 ×
+-- estimate_fan_for_target. For 14 candidates this is ~14× the work of
+-- pre-T10's single ting calc. Tests stay under 30s.
 function M.evaluate_discard_candidates(
    deal:         DealState,
    player_index: integer,
    _personality: AiPersonality,
-   target:       TargetKind,
+   _target:      TargetKind,
    live:         {string: integer}
 ): {CandidateAction}
    local p = deal.players[player_index]
    local concealed = p.hand.concealed_tiles
-   local features = M.compute_features(concealed, p.hand.sets)
-   local counts: {string: integer} = {}
-   for _, t in ipairs(concealed) do
-      local k = t.kind_id as string
-      counts[k] = (counts[k] or 0) + 1
-   end
+   local saved = concealed
 
-   -- Build a tile_id → sorted-position map so the id-tiebreak term is a
-   -- bounded integer the utility encoding can absorb.
+   -- tile_id → sorted-position for deterministic tiebreaking in rank.
    local sorted_ids: {string} = {}
    for _, t in ipairs(concealed) do sorted_ids[#sorted_ids + 1] = t.tile_id as string end
    table.sort(sorted_ids)
@@ -674,28 +770,23 @@ function M.evaluate_discard_candidates(
    local out: {CandidateAction} = {}
    for _, t in ipairs(concealed) do
       local rest = tiles_without_id(concealed, t.tile_id)
+      p.hand.concealed_tiles = rest
+      local dist, expected_fan, dominant = M.expected_fan_dist(deal, player_index, live)
+      local feat_after = M.compute_features(rest, p.hand.sets)
+      local depletion = M.visible_depletion(dominant, feat_after, live, p.seat_wind, deal.round_wind)
       local after_ting = td.ting_distance_live(rest, p.hand.sets, live)
-      local value = M.tile_value(t.kind_id, target, p.seat_wind, deal.round_wind)
-      local priority = discard_priority(
-         t.kind_id, counts[t.kind_id as string] or 1,
-         target, features, p.seat_wind, deal.round_wind
-      )
-
-      local utility = -(after_ting as number) * 1e9
-                      + (priority as number) * 1e6
-                      - (value as number) * 1e3
-                      - (id_index[t.tile_id as string] as number)
+      p.hand.concealed_tiles = saved
 
       out[#out + 1] = {
          action               = engine.discard(player_index, t.tile_id),
          tag                  = "discard",
-         target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+         target_distribution  = dist,
          ting_after           = after_ting,
-         ukeire_after         = -1,    -- enriched on demand
-         expected_fan         = -1,    -- enriched on demand
-         visible_depletion    = 0.0,
+         ukeire_after         = -1,    -- enriched on demand for top-K
+         expected_fan         = expected_fan,
+         visible_depletion    = depletion,
          danger               = 0.0,
-         utility              = utility,
+         utility              = expected_fan + (id_index[t.tile_id as string] as number) * -1e-9,
          accepted             = true,
          rejection_reason     = "",
       }
@@ -703,37 +794,40 @@ function M.evaluate_discard_candidates(
    return out
 end
 
--- Populates the expensive per-candidate metrics (ukeire_after,
--- expected_fan, target_distribution) on a discard candidate. Called for
--- top-K candidates only. No-op for non-discard candidates (they carry
--- their metrics from the gate that produced them).
+-- Populates ukeire_after on a discard candidate (compute_ukeire is the
+-- expensive remaining piece; expected_fan / target_distribution are now
+-- populated at evaluate time). No-op for non-discard candidates.
 function M.enrich_candidate(
    deal:         DealState,
    player_index: integer,
-   target:       TargetKind,
+   _target:      TargetKind,
    live:         {string: integer},
    c:            CandidateAction
 )
    if c.tag ~= "discard" then return end
+   if c.ukeire_after >= 0 then return end   -- already enriched
    local p = deal.players[player_index]
    local discard_action = c.action as DiscardAction
    local rest = tiles_without_id(p.hand.concealed_tiles, discard_action.tile_id)
    local saved = p.hand.concealed_tiles
    p.hand.concealed_tiles = rest
-   c.expected_fan = M.estimate_fan_for_target(deal, player_index, target)
    c.ukeire_after = M.compute_ukeire(deal, player_index, live)
    p.hand.concealed_tiles = saved
-   c.target_distribution[target as string] = c.expected_fan as number
 end
 
--- Sorts candidates by utility descending. Stable tiebreak by tag, then by
--- the action's tile_id-ish string when present (kept implicit; ties on
--- utility are broken by the upstream id_index encoding for discards).
+-- Sorts candidates by utility descending. Tiebreak: ukeire desc (more
+-- improving kinds), ting asc (closer to ting), tag asc, id asc — all
+-- already encoded into utility's tiny id_index term so utility-only
+-- ordering is sufficient when discards drove the comparison. Distinct
+-- tags (discard vs call vs hu) typically do not share utility scales;
+-- callers pick by tag priority before ranking utilities within a tag.
 function M.rank_candidates(cands: {CandidateAction}): {CandidateAction}
    local out: {CandidateAction} = {}
    for _, c in ipairs(cands) do out[#out + 1] = c end
    table.sort(out, function(a: CandidateAction, b: CandidateAction): boolean
       if a.utility ~= b.utility then return a.utility > b.utility end
+      if a.ukeire_after ~= b.ukeire_after then return a.ukeire_after > b.ukeire_after end
+      if a.ting_after ~= b.ting_after then return a.ting_after < b.ting_after end
       if a.tag ~= b.tag then return a.tag < b.tag end
       return false
    end)
@@ -803,18 +897,27 @@ function M.max_est_fan_hypothetical(
    return v
 end
 
--- Returns true if the AI's *chosen* target (best fitness × est_fan) has
--- est_fan ≥ 3. Mirrors choose_target's semantics so the gate aligns with
--- what the AI will actually pursue. Using raw max_est_fan instead would
--- always pass because qing_yi_se's base of 6 inflates the ceiling on
--- every hand regardless of structural reachability.
-function M.has_three_fan_target(deal: DealState, player_index: integer): boolean
-   local _t, est_fan = M.choose_target(deal, player_index, M.NEUTRAL_PERSONALITY)
-   return est_fan >= 3
+-- Returns true if at least one target is structurally feasible AND has
+-- est_fan ≥ 3 on the current hand. This is a feasibility gate, not a
+-- preference: the call gate accepts calls that *could* lead to any 3-fan
+-- target, even if the probability ranker currently prefers a different
+-- target. Commit 4 replaces these gates with a post-call candidate-
+-- pipeline rerun; this function exists for call/kong gates in commit 3.
+function M.has_three_fan_target(deal: DealState, player_index: integer, _live: {string: integer}): boolean
+   local p = deal.players[player_index]
+   local feat = M.compute_features(p.hand.concealed_tiles, p.hand.sets)
+   for _, t in ipairs(TARGETS) do
+      if target_feasible(t, feat) then
+         local fan = M.estimate_fan_for_target(deal, player_index, t)
+         if fan >= 3 then return true end
+      end
+   end
+   return false
 end
 
 -- Hypothetical variant: temporarily swaps the player's hand and runs
--- has_three_fan_target.
+-- has_three_fan_target. `live` is recomputed inside since it depends on the
+-- swapped concealed tile count.
 function M.has_three_fan_target_hypothetical(
    deal:                   DealState,
    player_index:           integer,
@@ -826,7 +929,8 @@ function M.has_three_fan_target_hypothetical(
    local saved_sets      = p.hand.sets
    p.hand.concealed_tiles = hypothetical_concealed
    p.hand.sets            = hypothetical_sets
-   local v = M.has_three_fan_target(deal, player_index)
+   local live = M.compute_live_counts(deal, player_index)
+   local v = M.has_three_fan_target(deal, player_index, live)
    p.hand.concealed_tiles = saved_concealed
    p.hand.sets            = saved_sets
    return v
