@@ -160,11 +160,35 @@ local function make_debug_run(seed: integer): RunState
    return rs
 end
 
+-- Pending entry passed in by an upstream scene (boon select). When set,
+-- the next reset() consumes it instead of building a debug RunState.
+local pending_run: RunState = nil
+local pending_seed: integer = 0
+local has_pending: boolean = false
+
+-- Public entry: call before pushing the table scene to begin a real run
+-- with the given RunState and seed. Cleared after consumption.
+function M.start_run(rs: RunState, seed: integer)
+   pending_run = rs
+   pending_seed = seed
+   has_pending = true
+end
+
 local function reset(seed: integer)
    boons_init.reset_and_register_all()
+   local rs: RunState
+   local effective_seed = seed
+   if has_pending then
+      rs = pending_run
+      effective_seed = pending_seed
+      has_pending = false
+      pending_run = nil
+   else
+      rs = make_debug_run(seed)
+   end
    state = {
-      seed             = seed,
-      deal             = engine.new_deal_with_run(rng_mod.from_seed(seed), make_debug_run(seed)),
+      seed             = effective_seed,
+      deal             = engine.new_deal_with_run(rng_mod.from_seed(effective_seed), rs),
       step_mode        = false,
       wait_for_step    = false,
       ai_pace_left     = AI_PACE_AUTO,
@@ -176,7 +200,7 @@ local function reset(seed: integer)
       selected_opening_tile_ids = {},
       last_reason_by_seat = {},
    }
-   push_log("sys", "deal opened (seed=" .. tostring(seed) .. ")")
+   push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. ")")
    check_conservation()
 end
 

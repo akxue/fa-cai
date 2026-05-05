@@ -7,8 +7,9 @@
 
 require("app.scene_stack")
 
-local scene_stack = require("app.scene_stack")
-local table_scene = require("scenes.table_scene")
+local scene_stack       = require("app.scene_stack")
+local table_scene       = require("scenes.table_scene")
+local boon_select_scene = require("scenes.boon_select_scene")
 
 local record StartState
    selected: integer
@@ -56,7 +57,7 @@ end
 local function activate()
    local choice = MENU_LABELS[state.selected]
    if choice == "Start Run" then
-      scene_stack.replace(table_scene as Scene)
+      scene_stack.push(boon_select_scene as Scene)
    elseif choice == "Debug Table (S05)" then
       scene_stack.replace(table_scene as Scene)
    elseif choice == "Quit" then
