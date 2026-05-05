@@ -34,45 +34,29 @@ global record AiReasoning
                           -- has no target (pass_reaction, zi_mo, hu_on_discard).
    ukeire:      integer   -- live ukeire after this decision; -1 if N/A
    est_fan:     integer   -- target's estimated fan ceiling; -1 if N/A
+   candidates:  {CandidateAction}   -- top-K alternatives the AI considered;
+                                    -- the first entry is the chosen action.
+                                    -- Empty for trivial decisions (draw,
+                                    -- pass_reaction with no claim window).
 end
 
-local M = {}
+local record AiModule
+   compute_live_counts: function(DealState, integer): {string: integer}
+   decide_main:         function(DealState, integer): (DealAction, AiReasoning)
+   decide_reaction:     function(DealState, integer): (DealAction, AiReasoning)
+end
+local M: AiModule = {} as AiModule
 
 local PLAYER_COUNT <const> = 4
 local NA <const> = -100
 
--- ── Live-tile bookkeeping ─────────────────────────────────────────────────
--- Returns a `live_counts` map of how many copies of each kind are still
--- drawable from the AI's perspective: 4 minus visible copies in (own
--- concealed, all sets across all players, all discards across all players,
--- pending discard if any). Other players' concealed tiles are intentionally
--- not subtracted — they are not visible to this AI.
+-- Post-call gate (S07 T16, T17). The call is accepted iff the best
+-- post-call discard candidate has probability-weighted expected_fan ≥ 3.
+local POST_CALL_FAN_FLOOR <const>: integer = 3
 
-local ALL_KINDS: {string} = {
-   "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
-   "wan_1","wan_2","wan_3","wan_4","wan_5","wan_6","wan_7","wan_8","wan_9",
-   "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
-   "east","south","west","north","fa_cai","hong_zhong","bai_ban",
-}
-
-function M.compute_live_counts(deal: DealState, player_index: integer): {string:integer}
-   local live: {string:integer} = {}
-   for _, k in ipairs(ALL_KINDS) do live[k] = 4 end
-   local function dec(k: TileKindId)
-      local s = k as string
-      live[s] = (live[s] or 0) - 1
-   end
-   for _, t in ipairs(deal.players[player_index].hand.concealed_tiles) do dec(t.kind_id) end
-   for i = 1, PLAYER_COUNT do
-      local p = deal.players[i]
-      for _, s in ipairs(p.hand.sets) do
-         for _, t in ipairs(s.tiles) do dec(t.kind_id) end
-      end
-      for _, t in ipairs(p.hand.discards) do dec(t.kind_id) end
-   end
-   if deal.has_pending_discard then dec(deal.pending_discard.tile.kind_id) end
-   return live
-end
+-- compute_live_counts now lives in ai_strategy.tl. Re-exported at the
+-- bottom of this file so existing callers (table_scene, tests) keep
+-- working through the ai.tl boundary.
 
 -- ── Score-context builder ──────────────────────────────────────────────────
 -- Mirrors deal_engine.build_score_ctx so AI Hu legality matches the engine
@@ -171,6 +155,72 @@ end
 
 -- ── AiReasoning constructor ───────────────────────────────────────────────
 
+-- Builds a placeholder CandidateAction for a non-discard action (Hu, kong,
+-- peng, chi, pass). Discards have rich candidates produced by the strategy
+-- pipeline; calls go through the gates inline in decide_main /
+-- decide_reaction and produce a single chosen candidate. The richer
+-- post-call-best-candidate evaluation lands in commit 4 (T16).
+local function mk_simple_candidate(action: DealAction, tag: string): CandidateAction
+   return {
+      action               = action,
+      tag                  = tag,
+      target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+      ting_after           = NA,
+      ukeire_after         = -1,
+      expected_fan         = -1,
+      visible_depletion    = 0.0,
+      danger               = 0.0,
+      utility              = 0.0,
+      accepted             = true,
+      rejection_reason     = "",
+   }
+end
+
+local function mk_call_candidate(
+   action:           DealAction,
+   tag:              string,
+   best_after:       CandidateAction,
+   ting_after:       integer,
+   accepted:         boolean,
+   rejection_reason: string
+): CandidateAction
+   return {
+      action               = action,
+      tag                  = tag,
+      target_distribution  = best_after.target_distribution,
+      ting_after           = ting_after,
+      ukeire_after         = best_after.ukeire_after,
+      expected_fan         = best_after.expected_fan,
+      visible_depletion    = best_after.visible_depletion,
+      danger               = best_after.danger,
+      utility              = best_after.utility,
+      accepted             = accepted,
+      rejection_reason     = rejection_reason,
+   }
+end
+
+local function upgraded_added_kong_sets(sets: {TileSet}, fourth_tile: Tile): {TileSet}
+   local out: {TileSet} = {}
+   local upgraded = false
+   for _, s in ipairs(sets) do
+      if not upgraded and (s.kind as string) == "peng" and #s.tiles > 0 and s.tiles[1].kind_id == fourth_tile.kind_id then
+         local tiles: {Tile} = {}
+         for _, t in ipairs(s.tiles) do tiles[#tiles + 1] = t end
+         tiles[#tiles + 1] = fourth_tile
+         out[#out + 1] = {
+            kind        = "kong" as TileSetKind,
+            visibility  = s.visibility,
+            tiles       = tiles,
+            called_from = s.called_from,
+         }
+         upgraded = true
+      else
+         out[#out + 1] = s
+      end
+   end
+   return out
+end
+
 local function mk_reasoning(
    tag:        string,
    message:    string,
@@ -178,7 +228,8 @@ local function mk_reasoning(
    ting_before: integer,
    ting_after:  integer,
    ukeire:      integer,
-   est_fan:     integer
+   est_fan:     integer,
+   candidates:  {CandidateAction}
 ): AiReasoning
    return {
       tag         = tag,
@@ -188,6 +239,7 @@ local function mk_reasoning(
       ting_after  = ting_after,
       ukeire      = ukeire,
       est_fan     = est_fan,
+      candidates  = candidates or {},
    }
 end
 
@@ -241,7 +293,7 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
       local before = td.ting_distance_live(p.hand.concealed_tiles, p.hand.sets, live)
       return engine.draw(player_index), mk_reasoning(
          "draw", "draw (ting=" .. tostring(before) .. ")",
-         "", before, NA, -1, -1
+         "", before, NA, -1, -1, {}
       )
    end
 
@@ -260,27 +312,54 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
             local rest = tiles_without_id(concealed, drawn_id)
             local ok, _final = evaluate_hu(deal, player_index, rest, drawn_tile, true, deal.last_draw_was_supplement, false)
             if ok then
-               return engine.declare_hu(player_index, "" as TileId, true), mk_reasoning(
+               local zm_action = engine.declare_hu(player_index, "" as TileId, true)
+               return zm_action, mk_reasoning(
                   "zi_mo", "zi mo on " .. (drawn_tile.kind_id as string),
-                  "", NA, NA, -1, -1
+                  "", NA, NA, -1, -1,
+                  { mk_simple_candidate(zm_action, "zi_mo") }
                )
             end
          end
       end
 
       -- Choose target up front; downstream decisions use it.
-      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
       local live = M.compute_live_counts(deal, player_index)
-
-      -- Added Kong: strict gate — declare only if a 3-fan target remains
-      -- reachable post-kong.
+      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY, live)
+      -- Added Kong gate (S07 T16): declare only if the post-kong best
+      -- discard candidate's expected_fan ≥ 3. Probability-weighted check;
+      -- catches kongs that empty the AI's hand of useful tiles even if a
+      -- 3-fan target is technically still feasible.
       local ak_id, ak_ok = find_added_kong_target(concealed, p.hand.sets)
       if ak_ok then
          local rest = tiles_without_id(concealed, ak_id)
-         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, p.hand.sets) then
-            return engine.declare_added_kong(player_index, ak_id), mk_reasoning(
+         local fourth_tile: Tile = { tile_id = "" as TileId, kind_id = "" as TileKindId }
+         for _, t in ipairs(concealed) do
+            if t.tile_id == ak_id then fourth_tile = t; break end
+         end
+         local sets_after = upgraded_added_kong_sets(p.hand.sets, fourth_tile)
+         -- T19: kong gate uses supplement-draw averaging since the kong
+         -- triggers a supplement draw before the next discard.
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY)
+         local ak_action = engine.declare_added_kong(player_index, ak_id)
+         if post_avg >= POST_CALL_FAN_FLOOR then
+            return ak_action, mk_reasoning(
                "added_kong", "added kong",
-               target as string, NA, NA, -1, est_fan
+               target as string, NA, NA, -1, est_fan,
+               {
+                  {
+                     action               = ak_action,
+                     tag                  = "added_kong",
+                     target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+                     ting_after           = NA,
+                     ukeire_after         = -1,
+                     expected_fan         = post_avg,
+                     visible_depletion    = 0.0,
+                     danger               = 0.0,
+                     utility              = post_avg,
+                     accepted             = true,
+                     rejection_reason     = "",
+                  },
+               }
             )
          end
       end
@@ -311,22 +390,48 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
          for _, s in ipairs(p.hand.sets) do sets_after[#sets_after + 1] = s end
          sets_after[#sets_after + 1] = fake_set
          local after = td.ting_distance_live(rest, sets_after, live)
-         if after <= before
-            and strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
-            return engine.declare_concealed_kong(player_index, quad_kind), mk_reasoning(
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY)
+         if after <= before and post_avg >= POST_CALL_FAN_FLOOR then
+            local ck_action = engine.declare_concealed_kong(player_index, quad_kind)
+            return ck_action, mk_reasoning(
                "concealed_kong", "concealed kong " .. (quad_kind as string),
-               target as string, before, after, -1, est_fan
+               target as string, before, after, -1, est_fan,
+               {
+                  {
+                     action               = ck_action,
+                     tag                  = "concealed_kong",
+                     target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+                     ting_after           = after,
+                     ukeire_after         = -1,
+                     expected_fan         = post_avg,
+                     visible_depletion    = 0.0,
+                     danger               = 0.0,
+                     utility              = post_avg,
+                     accepted             = true,
+                     rejection_reason     = "",
+                  },
+               }
             )
          end
       end
 
-      -- Discard via target-aware strategy.
-      local tid, before, after, ukeire = strategy.pick_best_discard(
+      -- Discard via candidate pipeline. We rank all legal discards by the
+      -- candidate utility and enrich the top 3 for inspector display.
+      local before = td.ting_distance_live(concealed, p.hand.sets, live)
+      local discard_cands = strategy.evaluate_discard_candidates(
          deal, player_index, strategy.NEUTRAL_PERSONALITY, target, live
       )
-      return engine.discard(player_index, tid), mk_reasoning(
-         "discard", "discard " .. (tid as string),
-         target as string, before, after, ukeire, est_fan
+      local ranked = strategy.rank_candidates(discard_cands, strategy.NEUTRAL_PERSONALITY)
+      local top3 = strategy.top_n_candidates(ranked, 3)
+      for _, c in ipairs(top3) do
+         strategy.enrich_candidate(deal, player_index, target, live, c)
+      end
+      local chosen = top3[1]
+      local discard_action = chosen.action as DiscardAction
+      return chosen.action, mk_reasoning(
+         "discard", "discard " .. (discard_action.tile_id as string),
+         target as string, before, chosen.ting_after, chosen.ukeire_after, est_fan,
+         top3
       )
    end
 
@@ -334,7 +439,7 @@ function M.decide_main(deal: DealState, player_index: integer): DealAction, AiRe
    -- not invoke decide_main outside the AI's turn.
    return engine.draw(player_index), mk_reasoning(
       "draw", "unexpected phase: " .. phase,
-      "", NA, NA, -1, -1
+      "", NA, NA, -1, -1, {}
    )
 end
 
@@ -349,12 +454,13 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
    if (deal.phase as string) ~= "reaction_window" then
       return engine.pass_reaction(player_index), mk_reasoning(
          "pass_reaction", "not in reaction window",
-         "", NA, NA, -1, -1
+         "", NA, NA, -1, -1, {}
       )
    end
 
    local p = deal.players[player_index]
    local concealed = p.hand.concealed_tiles
+   local rejected_candidates: {CandidateAction} = {}
 
    -- Hu on discard (or qiang gang on pending added kong).
    if deal.has_pending_discard then
@@ -362,9 +468,11 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          local incoming = deal.pending_discard.tile
          local ok, _final = evaluate_hu(deal, player_index, concealed, incoming, false, false, false)
          if ok then
-            return engine.declare_hu(player_index, incoming.tile_id, false), mk_reasoning(
+            local hu_action = engine.declare_hu(player_index, incoming.tile_id, false)
+            return hu_action, mk_reasoning(
                "hu_on_discard", "hu on " .. (incoming.kind_id as string),
-               "", NA, NA, -1, -1
+               "", NA, NA, -1, -1,
+               { mk_simple_candidate(hu_action, "hu_on_discard") }
             )
          end
       end
@@ -373,16 +481,18 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
          local kong_tile = deal.pending_added_kong.tile
          local ok, _final = evaluate_hu(deal, player_index, concealed, kong_tile, false, false, true)
          if ok then
-            return engine.declare_hu(player_index, deal.pending_added_kong.tile_id, false), mk_reasoning(
+            local hu_action = engine.declare_hu(player_index, deal.pending_added_kong.tile_id, false)
+            return hu_action, mk_reasoning(
                "hu_on_discard", "qiang gang on " .. (kong_tile.kind_id as string),
-               "", NA, NA, -1, -1
+               "", NA, NA, -1, -1,
+               { mk_simple_candidate(hu_action, "hu_on_discard") }
             )
          end
       end
       -- No legal Peng/Chi/Open Kong on a pending added kong.
       return engine.pass_reaction(player_index), mk_reasoning(
          "pass_reaction", "pass on added kong",
-         "", NA, NA, -1, -1
+         "", NA, NA, -1, -1, {}
       )
    end
 
@@ -393,22 +503,14 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
       if player_index == deal.pending_discard.discarder then
          return engine.pass_reaction(player_index), mk_reasoning(
             "pass_reaction", "discarder passes own window",
-            "", NA, NA, -1, -1
+            "", NA, NA, -1, -1, {}
          )
       end
       local discarded = deal.pending_discard.tile
       local discarder = deal.pending_discard.discarder
       local live   = M.compute_live_counts(deal, player_index)
       local before = td.ting_distance_live(concealed, p.hand.sets, live)
-      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY)
-      -- Strict gate: accept a call only if the post-call hand still has a
-      -- 3-fan-reachable target (using fitness × est_fan via choose_target).
-      -- Combined with the realized-modifier logic in estimate_fan_for_target,
-      -- this means: pengs of dragons / seat-wind / round-wind get accepted
-      -- (the new triplet realizes a +1 fan modifier), pengs that progress a
-      -- structurally-feasible pattern target get accepted, and pengs that
-      -- just shuffle tiles without creating a 3-fan path get rejected.
-      --
+      local target, est_fan = strategy.choose_target(deal, player_index, strategy.NEUTRAL_PERSONALITY, live)
       -- Earlier tried "permissive accept" (reject only if call DESTROYS a
       -- pre-existing 3-fan path). On 10 seeds it dropped Hu rate from 6/10
       -- to 1/10 — junk hands accepted too many sub-strategic calls and lost
@@ -429,11 +531,29 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             called_from = discarder,
          }
          local after = td.ting_distance_standard_live(rest, sets_after, live)
-         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
-            return engine.declare_open_kong(player_index, discarded.tile_id), mk_reasoning(
+         local post_avg = strategy.kong_post_supplement_avg_fan(deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY)
+         local ok_action = engine.declare_open_kong(player_index, discarded.tile_id)
+         local ok_candidate: CandidateAction = {
+            action               = ok_action,
+            tag                  = "open_kong",
+            target_distribution  = { default = 0.0, dui_dui_hu = 0.0, hun_yi_se = 0.0, qing_yi_se = 0.0 },
+            ting_after           = after,
+            ukeire_after         = -1,
+            expected_fan         = post_avg,
+            visible_depletion    = 0.0,
+            danger               = 0.0,
+            utility              = post_avg,
+            accepted             = post_avg >= POST_CALL_FAN_FLOOR,
+            rejection_reason     = post_avg >= POST_CALL_FAN_FLOOR and "" or "post_kong_expected_fan_below_floor",
+         }
+         if post_avg >= POST_CALL_FAN_FLOOR then
+            return ok_action, mk_reasoning(
                "open_kong", "open kong " .. (discarded.kind_id as string),
-               target as string, before, after, -1, est_fan
+               target as string, before, after, -1, est_fan,
+               { ok_candidate }
             )
+         else
+            rejected_candidates[#rejected_candidates + 1] = ok_candidate
          end
       end
 
@@ -451,11 +571,21 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
             called_from = discarder,
          }
          local after = strategy.post_call_ting(rest, sets_after, live)
-         if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
-            return engine.declare_peng(player_index, discarded.tile_id), mk_reasoning(
+         local best_after, best_ok = strategy.post_call_best_candidate_hypothetical(
+            deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY
+         )
+         local peng_action = engine.declare_peng(player_index, discarded.tile_id)
+         local accepted = best_ok and best_after.expected_fan >= POST_CALL_FAN_FLOOR
+         local rejection = accepted and "" or "post_call_expected_fan_below_floor"
+         local peng_candidate = mk_call_candidate(peng_action, "peng", best_after, after, accepted, rejection)
+         if accepted then
+            return peng_action, mk_reasoning(
                "peng", "peng " .. (discarded.kind_id as string),
-               target as string, before, after, -1, est_fan
+               target as string, before, after, -1, est_fan,
+               { peng_candidate, best_after }
             )
+         else
+            rejected_candidates[#rejected_candidates + 1] = peng_candidate
          end
       end
 
@@ -488,11 +618,21 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
                called_from = discarder,
             }
             local after = strategy.post_call_ting(rest, sets_after, live)
-            if strategy.has_three_fan_target_hypothetical(deal, player_index, rest, sets_after) then
-               return engine.declare_chi(player_index, discarded.tile_id, pair), mk_reasoning(
+            local best_after, best_ok = strategy.post_call_best_candidate_hypothetical(
+               deal, player_index, rest, sets_after, live, strategy.NEUTRAL_PERSONALITY
+            )
+            local chi_action = engine.declare_chi(player_index, discarded.tile_id, pair)
+            local accepted = best_ok and best_after.expected_fan >= POST_CALL_FAN_FLOOR
+            local rejection = accepted and "" or "post_call_expected_fan_below_floor"
+            local chi_candidate = mk_call_candidate(chi_action, "chi", best_after, after, accepted, rejection)
+            if accepted then
+               return chi_action, mk_reasoning(
                   "chi", "chi " .. (discarded.kind_id as string),
-                  target as string, before, after, -1, est_fan
+                  target as string, before, after, -1, est_fan,
+                  { chi_candidate, best_after }
                )
+            else
+               rejected_candidates[#rejected_candidates + 1] = chi_candidate
             end
          end
       end
@@ -500,8 +640,10 @@ function M.decide_reaction(deal: DealState, player_index: integer): DealAction, 
 
    return engine.pass_reaction(player_index), mk_reasoning(
       "pass_reaction", "pass",
-      "", NA, NA, -1, -1
+      "", NA, NA, -1, -1, rejected_candidates
    )
 end
+
+M.compute_live_counts = strategy.compute_live_counts
 
 return M
