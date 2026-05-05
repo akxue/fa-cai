@@ -98,7 +98,7 @@ local SEQUENCE_VALUE: {string: number} = {
 }
 
 -- triplet_value: prefers honors and dragons for peng-building.
--- non-yakuhai-honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4 (computed)
+-- non-value honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4 (computed)
 local TRIPLET_VALUE: {string: number} = {
    tiao_1 = 2, tiao_9 = 2, wan_1 = 2, wan_9 = 2, bing_1 = 2, bing_9 = 2,
    tiao_2 = 3, tiao_3 = 3, tiao_4 = 3, tiao_5 = 3, tiao_6 = 3, tiao_7 = 3, tiao_8 = 3,
@@ -157,17 +157,6 @@ function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
 
    local max_suit = ""
    local max_suit_count = 0
-   for s, n in pairs(suit_counts) do
-      if n > max_suit_count then
-         max_suit = s
-         max_suit_count = n
-      end
-   end
-
-   local off_suit = 0
-   for s, n in pairs(suit_counts) do
-      if s ~= max_suit then off_suit = off_suit + n end
-   end
 
    -- Iterate sets:
    --   * Credit each open peng/kong as a triplet (a structural commitment
@@ -175,8 +164,8 @@ function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
    --   * Track open_chi_count separately — chis disqualify dui_dui_hu.
    --   * Track which suits / honors have been committed via open sets, so
    --     qing_yi_se and hun_yi_se feasibility can be gated.
-   --   * Add open-set tiles to max_suit_count / off_suit_count / honor_count
-   --     so target_fitness sees the full committed picture.
+   --   * Add open-set tiles to suit_counts / honor_count before choosing the
+   --     dominant suit, so target_fitness sees the full committed picture.
    local open_set_count = #sets
    local has_open = false
    local open_chi_count = 0
@@ -199,13 +188,21 @@ function M.compute_features(concealed: {Tile}, sets: {TileSet}): HandFeatures
          else
             local s = suit_of(k)
             if s ~= "" then committed_suits_set[s] = true end
-            if s == max_suit then
-               max_suit_count = max_suit_count + 1
-            else
-               off_suit = off_suit + 1
-            end
+            if s ~= "" then suit_counts[s] = (suit_counts[s] or 0) + 1 end
          end
       end
+   end
+
+   for s, n in pairs(suit_counts) do
+      if n > max_suit_count then
+         max_suit = s
+         max_suit_count = n
+      end
+   end
+
+   local off_suit = 0
+   for s, n in pairs(suit_counts) do
+      if s ~= max_suit then off_suit = off_suit + n end
    end
 
    local committed_suits: {string} = {}
@@ -293,8 +290,9 @@ local function count_realized_modifiers(
       if (sk == "peng" or sk == "kong") and #s.tiles > 0 then
          local k = s.tiles[1].kind_id as string
          if DRAGON_KINDS[k] then total = total + 1
-         elseif k == sw then total = total + 1
-         elseif k == rw then total = total + 1 end
+         end
+         if k == sw then total = total + 1 end
+         if k == rw then total = total + 1 end
       end
    end
 
@@ -306,8 +304,9 @@ local function count_realized_modifiers(
    for k, n in pairs(counts) do
       if n >= 3 then
          if DRAGON_KINDS[k] then total = total + 1
-         elseif k == sw then total = total + 1
-         elseif k == rw then total = total + 1 end
+         end
+         if k == sw then total = total + 1 end
+         if k == rw then total = total + 1 end
       end
    end
    return total
@@ -330,7 +329,7 @@ end
 -- Water) still see the correct value and contribute through the runner.
 function M.estimate_fan_for_target(deal: DealState, player_index: integer, target: TargetKind): integer
    local p = deal.players[player_index]
-   local t = target as string
+   local target_name = target as string
 
    -- Feasibility gates: if the target's win shape is structurally impossible
    -- given what's already been committed via open sets, return 0. Without
@@ -342,15 +341,15 @@ function M.estimate_fan_for_target(deal: DealState, player_index: integer, targe
    -- gating it would just push every junk hand to has_three_fan_target =
    -- false and reject all calls regardless of merit.
    local feat = M.compute_features(p.hand.concealed_tiles, p.hand.sets)
-   if t == "dui_dui_hu" then
+   if target_name == "dui_dui_hu" then
       -- Pung-only: any open chi makes the win shape impossible.
       if feat.open_chi_count > 0 then return 0 end
-   elseif t == "qing_yi_se" then
+   elseif target_name == "qing_yi_se" then
       -- Pure single suit, no honors: dies on any committed honor or any
       -- second committed suit.
       if feat.has_committed_honor then return 0 end
       if #feat.committed_suits > 1 then return 0 end
-   elseif t == "hun_yi_se" then
+   elseif target_name == "hun_yi_se" then
       -- One suit + honors: dies if two suits are already committed.
       -- (Committed honors are fine — that's the "hun" part.)
       if #feat.committed_suits > 1 then return 0 end
@@ -588,7 +587,7 @@ end
 --      the chosen target's shape.
 --   3. tile-value of the discarded tile (asc) — prefer to drop low-value
 --      tiles for the target (terminals/honors for sequence targets;
---      non-yakuhai-honors for triplet targets).
+--      non-value honors for triplet targets).
 --   4. tile_id (asc) for determinism.
 --
 -- Ukeire is computed once for the *chosen* candidate (used in reasoning /

@@ -242,7 +242,7 @@ Use these terms consistently in code and docs:
 - **TileSet:** Chi/Peng/Kong group
 - **Ting / Ting Pai (聽牌):** a hand that needs exactly one more tile to form a valid Hu. Use `ting` in code. Do not use `tenpai`.
 - **Ting Distance:** the number of tiles needed to reach ting. −1 = already ting. 0 = one tile away from ting. Use `ting_distance` in code. Do not use `shanten`.
-- **Known Wall:** wall tiles that are still physically in the Wall but are known to the player through an information effect
+- **Known Wall:** wall tiles that are still physically in the Wall but are known to a seat through an information effect
 - **Concealed / Men Qian:** no open TileSets; a winning discard can still be the incoming tile for a concealed win
 
 Avoid using `hand` to mean a deal.
@@ -359,7 +359,6 @@ record DealState
   round_wind: Wind
   pending_discard: PendingDiscard?
   pending_added_kong: PendingAddedKong?
-  known_wall_tile_ids: {TileId}
   effect_states: {ActiveEffectState}
   rng: RngState
   deal_result: DealResult?  -- populated when phase = "deal_over", nil otherwise
@@ -420,23 +419,23 @@ Build `deal_invariants.validate_tile_conservation(deal)` early.
 
 ## Known Wall
 
-Known Wall tiles are still physically in the Wall. They are simply known to the player because of an information effect.
+Known Wall tiles are still physically in the Wall. They are known to a specific seat because of an information effect.
 
 ```lua
-record DealState
+record PlayerState
   known_wall_tile_ids: {TileId}
 end
 ```
 
 Rules:
 
-- Third Eye sets Known Wall to the next 5 normal front-Wall tiles.
-- Open Eyes sets Known Wall to the next 3 normal front-Wall tiles.
-- Drawing a known tile removes it from `known_wall_tile_ids`.
-- Fresh Start reshuffles the Wall, so it clears `known_wall_tile_ids`.
+- Third Eye sets the owner's Known Wall to the next 5 normal front-Wall tiles.
+- Open Eyes sets the owner's Known Wall to the next 3 normal front-Wall tiles.
+- Drawing a known tile removes it from every player's `known_wall_tile_ids`.
+- Fresh Start reshuffles the Wall, so it clears every player's `known_wall_tile_ids`.
 - Known Wall tracks normal front-Wall tiles only in Milestone 1.
 - Known information persists in the UI; the player should not need to memorize peeked tiles.
-- Boundary rule: if the Wall has fewer tiles remaining than an effect's requested reveal count, populate `known_wall_tile_ids` with all remaining front-Wall tiles. Never error on a short wall.
+- Boundary rule: if the Wall has fewer tiles remaining than an effect's requested reveal count, populate the owner's `known_wall_tile_ids` with all remaining front-Wall tiles. Never error on a short wall.
 
 ---
 
@@ -796,7 +795,8 @@ end
 
 record RevealWallFrontCommand
   command_kind: string          -- "reveal_wall_front"
-  count: integer                -- tiles to add to known_wall_tile_ids
+  owner_player_index: integer   -- seat whose known_wall_tile_ids receives the reveal
+  count: integer
 end
 
 record ReplaceConcealedTilesCommand
@@ -863,7 +863,7 @@ Initial boon behavior:
 - Open Eyes sets Known Wall to next 3 front-Wall tiles after player completes Peng.
 - Third Eye sets Known Wall to next 5 front-Wall tiles after opening deal.
 - Fresh Start may swap 0-3 tiles after initial deal, before first draw/discard.
-- Fresh Start returns selected tiles to Wall, reshuffles remaining Wall, draws the same number of replacements, clears Known Wall, marks used.
+- Fresh Start returns selected tiles to Wall, reshuffles remaining Wall, draws the same number of replacements, clears every seat's Known Wall, marks used.
 - Momentum contributes `round_index - 1` extra opening tiles through an opening modifier query.
 
 ---
@@ -919,7 +919,7 @@ For each AI discard, emit an `AddLogCommand` with:
 
 ### Hidden Information
 
-AI concealed tiles are hidden in normal Dev Mode. The debug inspector reveals them. AI must not read `known_wall_tile_ids` — that field is player-only information.
+AI concealed tiles are hidden in normal Dev Mode. The debug inspector reveals them. AI may read only its own seat's `known_wall_tile_ids`; M1 vanilla AIs do not use that field because they own no information effects yet.
 
 ---
 
@@ -1392,7 +1392,7 @@ Acceptance criteria:
 - Effects do not mutate deal/run state directly.
 - Effects cannot bypass Hu shape validation or the 3 fan minimum.
 - All seven starter boons are available as typed content and behavior modules.
-- Fresh Start clears Known Wall and preserves tile conservation.
+- Fresh Start clears every seat's Known Wall and preserves tile conservation.
 
 Verification:
 
@@ -1451,7 +1451,7 @@ Acceptance criteria:
 
 - AI uses `DealAction`s and never mutates state directly.
 - AI concealed tiles are hidden in normal Dev Mode and visible in Inspector Mode.
-- AI does not read player-only `known_wall_tile_ids`.
+- M1 vanilla AI does not use `known_wall_tile_ids`; future AI may read only its own seat's list.
 - Debug UI can play through a complete deal and inspect failures.
 
 Verification:
@@ -1536,11 +1536,11 @@ Target-pattern heuristic:
 - `T08`: Define `TargetKind` enum (`dui_dui_hu`, `hun_yi_se`, `qing_yi_se`, `default`) and `AiPersonality` record (target weights, call appetite, tile-value bias). Hardcode `NEUTRAL` personality for vanilla AIs.
 - `T09`: Define tile-value tables in `ai_strategy.tl` (tiebreakers when ting and ukeire are equal):
   - `sequence_value`: terminal=1, edge(2,8)=2, near(3,7)=3, mid(4,5,6)=4, honors=0.
-  - `triplet_value`: non-yakuhai-honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4.
+  - `triplet_value`: non-value honor=1, suited terminal=2, suited mid=3, dragon=4, seat/round wind=4.
   - The active table is selected by target (sequence-leaning targets use `sequence_value`; triplet-leaning targets use `triplet_value`).
 - `T10`: Implement target evaluator: composition features (honor count, max same-suit count, pair count) → per-target score.
 - `T11`: Implement ukeire computation alongside ting distance.
-- `T12`: Implement `estimate_fan_for_target(deal, player_index, target): integer` — pre-ting fan ceiling for a constructed-hypothetical completion of `target`. Builds a synthetic `ScoreResult` capturing the structural facts the target implies (e.g., dui_dui_hu → all triplets; hun_yi_se → one suit + honors; qing_yi_se → one suit no honors; default → standard four-sets-pair) plus obvious modifiers (men_qian if no open sets, dragon_pung per dragon-pair-or-better). Routes the synthetic result through `effect_runner.apply_score_modifiers` so future AI-owned boons contribute. Returns the resulting fan total. This is the boon-aware filter — discards/calls/kong that would lock the AI to a sub-3-fan target are rejected.
+- `T12`: Implement `estimate_fan_for_target(deal, player_index, target): integer` — pre-ting fan ceiling for a constructed-hypothetical completion of `target`. Builds a synthetic `ScoreResult` capturing the structural facts the target implies (e.g., dui_dui_hu → all triplets; hun_yi_se → one suit + honors; qing_yi_se → one suit no honors; default → standard four-sets-pair) plus realized modifiers from committed dragon / seat-wind / round-wind triplets. Men Qian is not counted as a planning baseline; it remains a bonus if preserved. Routes the synthetic result through `effect_runner.apply_score_modifiers` so future AI-owned boons contribute. Returns the resulting fan total. This is the boon-aware filter — discards/calls/kong that would lock the AI to a sub-3-fan target are rejected.
 - `T13`: `evaluate_hu` (existing) continues to handle real Hu legality at ting; it is unchanged. The strategy module distinguishes pre-ting (use `estimate_fan_for_target`) from at-ting (use `evaluate_hu`).
 - `T14`: Implement target-aware `pick_best_discard`: rank candidate discards by `(filtered ting toward best target, ukeire, target alignment, tile-value)`. Filtered ting treats targets whose `estimate_fan_for_target` < 3 as infinity.
 - `T15`: Implement target-aware reaction logic: calls allowed only if they don't regress projected fan and the resulting target's `estimate_fan_for_target` ≥ 3. Default target stays concealed unless a call clears 3 fan.
@@ -1590,8 +1590,8 @@ Completion summary:
 - `estimate_fan_for_target` builds a synthetic ScoreResult from the target's implied structural facts and routes it through `effect_runner.apply_score_modifiers`. Forward-compat boon path is exercised by a synthetic-effect test (`T19`) — when AIs gain real boons in a later slice, the wiring is already in place.
 - `evaluate_hu` (in ai.tl) is unchanged and continues to handle Hu legality at ting via the validator + scorer + runner chain. The strategy module distinguishes pre-ting (estimate_fan_for_target) from at-ting (evaluate_hu).
 - Tile-value tables: `SEQUENCE_VALUE` (terminal=1 → mid=4) for sequence-leaning targets; `TRIPLET_VALUE` (honor=1 → dragon=4, seat/round wind +1) for `dui_dui_hu`. Used as discard tiebreakers.
-- Discard heuristic ranks candidates by (live_ting_after, tile_value, tile_id). Ukeire is computed once on the chosen candidate (per-candidate ukeire was 30× too expensive for the inner loop and rarely changed the ranking outcome).
-- Reaction logic accepts open kong / peng / chi only when both ting-not-regressed and the resulting hand still has a 3-fan-reachable target (`has_three_fan_target_hypothetical`). Concealed and added Kong gain the same gate.
+- Discard heuristic ranks candidates by (live_ting_after, target-aware discard_priority, tile_value, tile_id). Ukeire is computed once on the chosen candidate (per-candidate ukeire was 30× too expensive for the inner loop and rarely changed the ranking outcome).
+- Reaction logic accepts open kong / peng / chi when the resulting hand still has a 3-fan-reachable target (`has_three_fan_target_hypothetical`). Concealed and added Kong also require the same 3-fan gate; concealed Kong additionally keeps the no-ting-regression check.
 - `has_three_fan_target` delegates to `choose_target` so the gate uses `(target_fitness × est_fan ≥ 3)` semantics, mirroring what the AI will actually pursue. An earlier "any target reaches 3 fan" version was over-optimistic and reported every hand as 3-fan-reachable since dui_dui_hu's base is 3.
 - `target_fitness` tuned so `qing_yi_se` wins when honors are absent and `hun_yi_se` wins when honors are present (formerly tied at max_suit_count when honor_count=0).
 - Inspector renders an extra reasoning segment per AI seat: `[hun_yi_se est=5f uke=8]`. Non-target reasoning tags (pass_reaction, zi_mo, hu_on_discard) leave it empty.
@@ -1620,7 +1620,7 @@ Status: `pending`
 
 Goal: rebuild the AI's heuristic kernel as a candidate-record pipeline (the consensus shape across mature mahjong AI projects — see `docs/AI-RESEARCH-NOTES.md`). Replace the current per-target magic-number heuristic (`target_fitness`, `discard_priority`, `SEQUENCE_VALUE` / `TRIPLET_VALUE` tables, the explicit `choose_target` lexicographic chain) with a single fan-grounded scoring mechanism that produces structured `CandidateAction` records for every legal action. Behavior changes are measured against the S06 baseline (Hu 6/10) using a checked-in playtest harness.
 
-Why this comes now: S06 shipped a working AI that hits Hu 6/10 on the standard 10-seed sweep, but the architecture accumulated patches (Fix A, Fix B, target-aware discards, post-call-ting workaround) that each individually plug a hole the *one mechanism* would close. The per-seat audit on seed 42 (`docs/playtest-logs/s06-ai-state.md`) and the cross-project research notes (`docs/AI-RESEARCH-NOTES.md`) point at the same architectural shape: candidate records carrying structured metrics (target distribution, ting, ukeire, expected fan, visible depletion, danger), filtered by legality and 3-fan reachability, ranked by personality-weighted utility. Every research learning we surveyed plugs into this pipeline at a known box; the current code can't absorb them without more ad-hoc plumbing. The slice carries forward all engine-facing helpers (`evaluate_hu`, `compute_live_counts`, `count_realized_modifiers`, `effect_runner.apply_score_modifiers`, the `ting_distance` family, `post_call_ting`); only the heuristic kernel is replaced.
+Why this comes now: S06 shipped a working AI that hits Hu 6/10 on the standard 10-seed sweep, but the architecture accumulated patches (Fix A, Fix B, target-aware discards, post-call-ting workaround) that each individually plug a hole the *one mechanism* would close. The per-seat audit on seed 42 (`docs/playtest-logs/s06-ai-state.md`) and the cross-project research notes (`docs/AI-RESEARCH-NOTES.md`) point at the same architectural shape: candidate records carrying structured metrics (target distribution, ting, ukeire, expected fan, visible depletion, danger), filtered by legality and 3-fan reachability, ranked by personality-weighted utility. Every research learning we surveyed plugs into this pipeline at a known box; the current code can't absorb them without more ad-hoc plumbing. The slice carries forward all engine-facing helpers and logic (`evaluate_hu`, `compute_live_counts`, realized-modifier estimation, `effect_runner.apply_score_modifiers`, the `ting_distance` family, `post_call_ting`); only the heuristic kernel is replaced.
 
 Dependencies:
 
@@ -1686,7 +1686,7 @@ Acceptance criteria:
 - The four magic-number tables/functions (`target_fitness`, `discard_priority`, `SEQUENCE_VALUE`, `TRIPLET_VALUE`) are removed; behavior is derived from probability × fan.
 - Visible depletion penalty visibly downgrades targets that opponents are racing (verifiable via inspector and a test).
 - Call gates reject calls whose best post-call candidate has `expected_fan < 3`, regardless of post-call ting.
-- All existing engine-facing helpers (`evaluate_hu`, `compute_live_counts`, `count_realized_modifiers`, `ting_distance` family, `post_call_ting`, `effect_runner.apply_score_modifiers`) are reused unchanged.
+- All existing engine-facing helpers and logic (`evaluate_hu`, `compute_live_counts`, realized-modifier estimation, `ting_distance` family, `post_call_ting`, `effect_runner.apply_score_modifiers`) are reused unchanged.
 - `make test` passes; new tests cover the candidate pipeline shape, visible-depletion behavior, and post-call-best-candidate gating.
 - The S06 empirical baseline (Hu 6/10) is matched or exceeded by the slice's tip commit; intermediate commits may dip but never merge to main below baseline.
 

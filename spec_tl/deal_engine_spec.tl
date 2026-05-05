@@ -177,6 +177,24 @@ describe("deal_engine", function()
          local r = invariants.validate_tile_conservation(tr.deal)
          assert.is_true(r.ok, r.details)
       end)
+
+      it("removes the drawn tile from every player's Known Wall view", function()
+         local d = make_deal(
+            {}, {}, {}, {},
+            { tile("bing_1_a", "bing_1"), tile("bing_2_a", "bing_2") },
+            "awaiting_draw", 2, "" as TileId, false
+         )
+         d.players[1].known_wall_tile_ids = { "bing_1_a" as TileId, "bing_2_a" as TileId }
+         d.players[2].known_wall_tile_ids = { "bing_1_a" as TileId }
+         d.players[3].known_wall_tile_ids = { "bing_2_a" as TileId }
+
+         local tr = engine.apply_action(d, engine.draw(2))
+         assert.is_true(tr.ok, tr.error)
+         assert.are.equal(1, #tr.deal.players[1].known_wall_tile_ids)
+         assert.are.equal("bing_2_a", tr.deal.players[1].known_wall_tile_ids[1] as string)
+         assert.are.equal(0, #tr.deal.players[2].known_wall_tile_ids)
+         assert.are.equal(1, #tr.deal.players[3].known_wall_tile_ids)
+      end)
    end)
 
    -- ── discard ───────────────────────────────────────────────────────────────
@@ -549,6 +567,8 @@ describe("deal_engine", function()
          local hand14 = parse("1111t 234t 567t 89w 1w 5w")  -- 14 tiles
          local supp = tile("bing_5_a", "bing_5")
          local d = make_deal(hand14, {}, {}, {}, { supp }, "awaiting_action", 1, "wan_5_a" as TileId, true)
+         d.players[1].known_wall_tile_ids = { "bing_5_a" as TileId }
+         d.players[2].known_wall_tile_ids = { "bing_5_a" as TileId }
 
          local tr = engine.apply_action(d, engine.declare_concealed_kong(1, "tiao_1" as TileKindId))
          assert.is_true(tr.ok, tr.error)
@@ -559,6 +579,8 @@ describe("deal_engine", function()
          assert.are.equal("kong", tr.deal.players[1].hand.sets[1].kind as string)
          assert.are.equal("concealed", tr.deal.players[1].hand.sets[1].visibility as string)
          assert.is_true(tr.deal.last_draw_was_supplement)
+         assert.are.equal(0, #tr.deal.players[1].known_wall_tile_ids)
+         assert.are.equal(0, #tr.deal.players[2].known_wall_tile_ids)
       end)
 
       it("empty supplement wall exhausts before concealed kong resolves", function()

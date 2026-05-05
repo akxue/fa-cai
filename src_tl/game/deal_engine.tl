@@ -182,6 +182,12 @@ local function remove_known(known: {TileId}, tile_id: TileId): {TileId}
    return out
 end
 
+local function remove_known_from_all(players: {PlayerState}, tile_id: TileId)
+   for _, p in ipairs(players) do
+      p.known_wall_tile_ids = remove_known(p.known_wall_tile_ids, tile_id)
+   end
+end
+
 local function has_passed(passes: {integer}, player_index: integer): boolean
    for _, pi in ipairs(passes) do
       if pi == player_index then return true end
@@ -293,6 +299,7 @@ local function draw_supplement(d: DealState, player_index: integer): DealState, 
    d.players[player_index].hand.concealed_tiles[
       #d.players[player_index].hand.concealed_tiles + 1
    ] = dr.tile
+   remove_known_from_all(d.players, dr.tile.tile_id)
    d.last_draw_was_supplement = true
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true
@@ -545,8 +552,7 @@ local function handle_draw(deal: DealState, action: DrawAction): DealTransition
    d.players[action.player_index].hand.concealed_tiles[
       #d.players[action.player_index].hand.concealed_tiles + 1
    ] = dr.tile
-   d.players[action.player_index].known_wall_tile_ids =
-      remove_known(d.players[action.player_index].known_wall_tile_ids, dr.tile.tile_id)
+   remove_known_from_all(d.players, dr.tile.tile_id)
    d.last_draw_was_supplement = false
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true

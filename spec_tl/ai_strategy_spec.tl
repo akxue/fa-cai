@@ -146,6 +146,27 @@ describe("ai_strategy", function()
          assert.are.equal("tiao", f.committed_suits[1])
       end)
 
+      it("includes open sets before choosing dominant suit", function()
+         -- Concealed is tiao-heavy by itself, but the committed open bing peng
+         -- makes bing the full-hand dominant suit.
+         local sets: {TileSet} = {
+            {
+               kind = "peng" as TileSetKind,
+               visibility = "open" as SetVisibility,
+               tiles = {
+                  { tile_id = "bing_5_a" as TileId, kind_id = "bing_5" as TileKindId },
+                  { tile_id = "bing_5_b" as TileId, kind_id = "bing_5" as TileKindId },
+                  { tile_id = "bing_5_c" as TileId, kind_id = "bing_5" as TileKindId },
+               },
+               called_from = 4,
+            },
+         }
+         local f = strategy.compute_features(parse("123t 4b"), sets)
+         assert.are.equal("bing", f.max_suit)
+         assert.are.equal(4, f.max_suit_count)
+         assert.are.equal(3, f.off_suit_count)
+      end)
+
       it("flags has_committed_honor on open peng of an honor", function()
          local sets: {TileSet} = {
             {
@@ -169,8 +190,17 @@ describe("ai_strategy", function()
       it("returns >=3 fan for dui_dui_hu base", function()
          local d = make_deal(parse("111t 222w 333b 44b 55b"), {})
          local fan = strategy.estimate_fan_for_target(d, 1, "dui_dui_hu" as TargetKind)
-         -- dui_dui_hu base = 3 + men_qian +1 = 4
+         -- dui_dui_hu base = 3; men_qian is intentionally not counted in the estimate.
          assert.is_true(fan >= 3, "expected ≥3 fan, got " .. tostring(fan))
+      end)
+
+      it("counts seat wind and round wind modifiers independently", function()
+         -- Player 1 is east in east round. A realized east triplet adds both
+         -- Seat Wind Pung and Round Wind Pung in the real scorer, so the
+         -- estimate should be default base 1 + 2 modifiers = 3.
+         local d = make_deal(parse("E E E 123t 456w 78b 9b"), {})
+         local fan = strategy.estimate_fan_for_target(d, 1, "default" as TargetKind)
+         assert.are.equal(3, fan)
       end)
 
       it("returns >=6 for qing_yi_se", function()

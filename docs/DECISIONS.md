@@ -123,8 +123,8 @@ Reason:
 Implications:
 - Adding a new effect requires: a metadata record in `content/`, a behavior module in `effects/boons/` (or a future folder for non-boon effects), and registration in the boons init.
 - New command kinds extend the typed envelope and the dispatcher in `effect_runner.apply_commands`. They must also have a builder function so call sites stay typed.
-- Reshuffling the wall invalidates Known Wall information, so `replace_concealed_tiles` with `reshuffle_wall=true` clears `known_wall_tile_ids`.
 - AI-only effects in future slices follow the same pattern; the runner already filters by owner via `has_owner` and `owner_player_index`.
+- Reshuffling the wall invalidates Known Wall information for every seat, so `replace_concealed_tiles` with `reshuffle_wall=true` clears every player's `known_wall_tile_ids`.
 
 ## D006: AI Is A Pure Decision Function; The Scene Drives Turn Pumping
 
@@ -145,7 +145,7 @@ Reason:
 - Lets us swap AI implementations (vanilla, defensive, opponent packages) by replacing the function call, not by reshaping the engine.
 
 Implications:
-- AI must not import `love`, `ui`, `scenes`, or `app`, and must not read `known_wall_tile_ids` (player-only information).
+- AI must not import `love`, `ui`, `scenes`, or `app`. It may read only its own seat's `known_wall_tile_ids`; M1 vanilla AIs do not use this field because they own no information effects yet.
 - AI returns `DealAction`s only; never mutates `DealState` directly.
 - `AiReasoning` is a structured record (tag, message, ting_before, ting_after) returned alongside the action; events stay free of subjective AI commentary.
 - Future opponent packages plug into the same two functions or layer on top through composition; no engine changes required.
@@ -190,7 +190,7 @@ Decision:
 - `ai.decide_main` and `ai.decide_reaction` retain their `(DealAction, AiReasoning)` contract. `AiReasoning` gains an optional `target` field surfaced in the inspector when set; non-target reasoning tags (`pass_reaction`, `zi_mo`, `hu_on_discard`) leave it unset.
 
 Reason:
-- Target-pattern heuristics are the well-established baseline for mahjong AI (riichi research; ukeire + yaku targeting + tile-value tables). They produce inspectable, explainable play without training a model.
+- Target-pattern heuristics are a well-established baseline for mahjong AI research: improving-tile count, hand-pattern targeting, and tile-value tables. They produce inspectable, explainable play without training a model.
 - Routing projected fan through the effect runner makes the AI boon-aware now even though M1 vanilla AIs have no boons. When AIs gain boons in a later slice, no new wiring is needed.
 - The personality parameter unifies "smarter vanilla AI" and "opponent packages" under one API. Packages become biased weights, not new code paths.
 
@@ -213,8 +213,8 @@ Context:
 Decision:
 - Move `known_wall_tile_ids` from `DealState` onto `PlayerState`. Each seat owns its own list.
 - `RevealWallFrontCommand` writes to the *owning* player's list, using the active effect's `owner_player_index`.
-- Fresh Start's reshuffle clears the *owning* player's list (not all players).
-- Normal-draw bookkeeping removes the drawn tile id from the *drawer's* list only.
+- Fresh Start's reshuffle clears every player's list because the wall order is no longer valid for anyone.
+- Draw bookkeeping removes the drawn tile id from every player's list, because a known tile stops being in the wall regardless of who drew it.
 - The AI rule changes from "AI must not read `known_wall_tile_ids`" to "AI may read its own seat's `known_wall_tile_ids`". M1 vanilla AIs still read nothing because no AI owns an info effect yet.
 
 Reason:
@@ -240,7 +240,7 @@ Context:
 
 Decision:
 - Open `S07: AI Candidate Pipeline` as the next AI slice. Rebuild the heuristic kernel — `pick_best_discard`, the call gates' bodies, `target_fitness`, `discard_priority`, the magic-number tile-value tables, `choose_target`'s explicit branching, `has_three_fan_target` — as a single candidate-record pipeline.
-- Keep all engine-facing helpers unchanged: `evaluate_hu`, `compute_live_counts`, `count_realized_modifiers`, `effect_runner.apply_score_modifiers`, the `ting_distance` family, `post_call_ting`, the chi-simulation tile-population fix.
+- Keep all engine-facing helpers and logic unchanged: `evaluate_hu`, `compute_live_counts`, realized-modifier estimation, `effect_runner.apply_score_modifiers`, the `ting_distance` family, `post_call_ting`, the chi-simulation tile-population fix.
 - Land a checked-in playtest harness (`scripts/playtest.lua` + `make playtest`) as the slice's first commit so every subsequent change is measured against the S06 baseline (Hu 6/10) instead of vibes-tuned.
 - Sequence: harness first (behavior-neutral); then candidate-record scaffold (behavior-neutral, ranking unchanged); then real probability-weighted `expected_fan` with visible-depletion penalty; then post-call-best-candidate gating; then kong replacement-draw expectation and personality-field plumbing.
 - Defer threat-triggered defense, opponent target inference, MCTS / search, ML, and additional hand-pattern targets like Qi Dui to later slices.
