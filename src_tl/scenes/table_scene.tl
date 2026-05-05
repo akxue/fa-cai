@@ -25,6 +25,7 @@ local fx_runner  = require("effects.effect_runner")
 local wall_mod   = require("game.wall")
 local content    = require("content.boons")
 local boons_init = require("effects.boons.init")
+local tile_render = require("ui.tile_render")
 
 local M = {}
 
@@ -36,74 +37,11 @@ local DEBUG_ROUND     <const> = 3       -- exercises Momentum surplus in S05.
 local LOG_MAX         <const> = 100
 local LOG_VISIBLE     <const> = 22
 
--- ── Tile rendering helper ────────────────────────────────────────────────
+-- ── Tile rendering helpers (live in ui/tile_render.tl) ──────────────────
 
-local KIND_LABEL: {string:string} = {
-   east = "E", south = "S", west = "W", north = "N",
-   fa_cai = "F", hong_zhong = "H", bai_ban = "B",
-}
-
-local function tile_label(t: Tile): string
-   if t == nil then return "??" end
-   local k = t.kind_id as string
-   local short = KIND_LABEL[k]
-   if short ~= nil then return short end
-   local suit, rank = k:match("^([a-z]+)_(%d+)$")
-   if suit == nil then return k end
-   local letter = "?"
-   if suit == "tiao" then letter = "T"
-   elseif suit == "wan" then letter = "W"
-   elseif suit == "bing" then letter = "B" end
-   return rank .. letter
-end
-
-local function format_set(s: TileSet): string
-   local parts: {string} = {}
-   for _, t in ipairs(s.tiles) do parts[#parts + 1] = tile_label(t) end
-   local body = table.concat(parts, " ")
-   local kind_short = (s.kind as string):upper()
-   if (s.visibility as string) == "concealed" then
-      return "[" .. kind_short .. "* " .. body .. "]"
-   end
-   return "[" .. kind_short .. " " .. body .. "]"
-end
-
--- Mahjong-friendly tile order for display: tiao 1-9 → wan 1-9 → bing 1-9 →
--- E S W N → F H B. Rules state stays in original (draw) order; this only
--- sorts what the human sees so pairs and runs are visually adjacent.
-local KIND_ORDER: {string: integer} = {}
-do
-   local i = 1
-   for _, suit in ipairs({"tiao", "wan", "bing"}) do
-      for r = 1, 9 do
-         KIND_ORDER[suit .. "_" .. tostring(r)] = i
-         i = i + 1
-      end
-   end
-   for _, h in ipairs({"east", "south", "west", "north", "fa_cai", "hong_zhong", "bai_ban"}) do
-      KIND_ORDER[h] = i
-      i = i + 1
-   end
-end
-
-local function tile_order_key(t: Tile): integer
-   return KIND_ORDER[t.kind_id as string] or 999
-end
-
--- Returns indices into `tiles` sorted by KIND_ORDER, with tile_id as a
--- deterministic tiebreaker. Indices are preserved so callers can still
--- reference the original slot (used for opening-action keybinds).
-local function sorted_indices(tiles: {Tile}): {integer}
-   local idxs: {integer} = {}
-   for i = 1, #tiles do idxs[i] = i end
-   table.sort(idxs, function(a: integer, b: integer): boolean
-      local ka = tile_order_key(tiles[a])
-      local kb = tile_order_key(tiles[b])
-      if ka ~= kb then return ka < kb end
-      return (tiles[a].tile_id as string) < (tiles[b].tile_id as string)
-   end)
-   return idxs
-end
+local tile_label     = tile_render.tile_label
+local format_set     = tile_render.format_set
+local sorted_indices = tile_render.sorted_indices
 
 -- ── Scene state ──────────────────────────────────────────────────────────
 
@@ -115,6 +53,12 @@ end
 local record SceneState
    seed:             integer
    deal:             DealState
+   -- "debug": all four seats AI-driven, all hands revealed by default.
+   -- "run":   seat 1 (East) is the human; opponents stay face-down unless
+   --          the inspector is toggled on. The AI driver still runs all
+   --          seats in commit 3; commit 4 swaps the seat-1 driver for
+   --          player input.
+   mode:             string
    step_mode:        boolean
    wait_for_step:    boolean
    ai_pace_left:     number
@@ -178,9 +122,11 @@ local function reset(seed: integer)
    boons_init.reset_and_register_all()
    local rs: RunState
    local effective_seed = seed
+   local mode = "debug"
    if has_pending then
       rs = pending_run
       effective_seed = pending_seed
+      mode = "run"
       has_pending = false
       pending_run = nil
    else
@@ -189,6 +135,7 @@ local function reset(seed: integer)
    state = {
       seed             = effective_seed,
       deal             = engine.new_deal_with_run(rng_mod.from_seed(effective_seed), rs),
+      mode             = mode,
       step_mode        = false,
       wait_for_step    = false,
       ai_pace_left     = AI_PACE_AUTO,
@@ -200,7 +147,7 @@ local function reset(seed: integer)
       selected_opening_tile_ids = {},
       last_reason_by_seat = {},
    }
-   push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. ")")
+   push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. " mode=" .. mode .. ")")
    check_conservation()
 end
 
@@ -585,7 +532,11 @@ local function draw_seat_panel(seat_index: integer, x: number, y: number, w: num
    local ty = y + 22
    local limit = w - 16
    local reveal = p.is_human or state.inspector_open
-   ty = ty + draw_text_wrapped("hand: " .. format_concealed(p, reveal), tx, ty, limit) + 2
+   -- Seat 1's concealed tiles are rendered as boxes in draw_player_hand_row;
+   -- the panel only shows the metadata (ting, sets, discards).
+   if seat_index ~= 1 then
+      ty = ty + draw_text_wrapped("hand: " .. format_concealed(p, reveal), tx, ty, limit) + 2
+   end
    if reveal then
       draw_text("ting: " .. ting_label(seat_index), tx, ty); ty = ty + 16
    else
@@ -596,6 +547,52 @@ local function draw_seat_panel(seat_index: integer, x: number, y: number, w: num
       ty = ty + draw_text_wrapped("sets: " .. sets, tx, ty, limit) + 2
    end
    ty = ty + draw_text_wrapped("disc: " .. format_discards(p), tx, ty, limit) + 2
+end
+
+-- Player hand row. Renders seat 1's concealed tiles as boxes inside the
+-- supplied rectangle. Tiles are sorted with sorted_indices so the row is
+-- stable across draws and matches the panel's text view (when shown).
+-- Selected_opening tile_ids are highlighted with a yellow border so the
+-- Fresh Start swap interaction is legible.
+local function draw_player_hand_row(x: number, y: number, w: number, h: number)
+   draw_panel(x, y, w, h, "Your Hand")
+   local p = state.deal.players[1]
+   local tiles = p.hand.concealed_tiles
+   local n = #tiles
+   if n == 0 then return end
+
+   local pad_x = 12
+   local pad_y = 28
+   local gap = 4
+   local avail_w = w - pad_x * 2
+   local avail_h = h - pad_y - 8
+   -- size tiles to fit `n` boxes within avail_w, capped to a sane max
+   local tile_w_calc = (avail_w - gap * (n - 1)) / n
+   local tile_w = math.min(48, tile_w_calc)
+   if tile_w < 16 then tile_w = 16 end
+   local tile_h = math.min(56, avail_h)
+   if tile_h < 24 then tile_h = 24 end
+
+   -- center the row horizontally
+   local row_w = tile_w * n + gap * (n - 1)
+   local start_x = x + pad_x + math.max(0, (avail_w - row_w) / 2)
+   local row_y = y + pad_y
+
+   local idxs = sorted_indices(tiles)
+   for slot, src_i in ipairs(idxs) do
+      local t = tiles[src_i]
+      local tx = start_x + (slot - 1) * (tile_w + gap)
+      local fr, fg, fb = 0.92, 0.90, 0.82
+      local br, bg, bb = 0.55, 0.50, 0.40
+      local selected = false
+      for _, id in ipairs(state.selected_opening_tile_ids) do
+         if id == t.tile_id then selected = true; break end
+      end
+      if selected then
+         br, bg, bb = 1.00, 0.90, 0.30
+      end
+      tile_render.draw_tile_box(t, tx, row_y, tile_w, tile_h, fr, fg, fb, br, bg, bb)
+   end
 end
 
 local function draw_status_bar(x: number, y: number, w: number)
@@ -812,14 +809,18 @@ function M.draw()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
 
-   -- Layout: status bar on top, table grid (3x3) center, log + inspector to the right, hints on bottom.
+   -- Layout: status bar on top, table grid (3x3) in the middle, player hand
+   -- row at the bottom of the table area, log + inspector on the right,
+   -- hints at the very bottom.
    local margin = 8
    local hint_h = 20
    local status_h = 24
+   local hand_row_h = 80
    local right_w = 360
    local table_w = sw - right_w - margin * 3
    local content_y = margin + status_h + margin
    local content_h = sh - content_y - hint_h - margin * 2
+   local grid_h = content_h - hand_row_h - margin
 
    draw_status_bar(margin, margin, sw - margin * 2)
 
@@ -829,7 +830,7 @@ function M.draw()
    --   .   S   .
    -- Player (P1 = East) sits at the bottom (south of screen).
    local cell_w = table_w / 3
-   local cell_h = content_h / 3
+   local cell_h = grid_h / 3
    local tx = margin
    local ty = content_y
 
@@ -841,8 +842,13 @@ function M.draw()
    draw_center(tx + cell_w, ty + cell_h, cell_w, cell_h)
    -- middle-right = South (P2)
    draw_seat_panel(2, tx + cell_w * 2, ty + cell_h, cell_w, cell_h)
-   -- bottom-center = East (P1, you)
+   -- bottom-center = East (P1, you) — sets/discards/ting only; concealed
+   -- tiles render in draw_player_hand_row below.
    draw_seat_panel(1, tx + cell_w, ty + cell_h * 2, cell_w, cell_h)
+
+   -- Player hand row spans the full table width below the grid.
+   local hand_y = content_y + grid_h + margin
+   draw_player_hand_row(tx, hand_y, table_w, hand_row_h)
 
    -- Right panel: log on top, inspector below if open, otherwise full log.
    local right_x = sw - right_w - margin
