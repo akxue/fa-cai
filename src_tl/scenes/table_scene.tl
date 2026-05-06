@@ -56,6 +56,12 @@ local record DiscardItem
    tile: Tile
 end
 
+local enum CachedOptsKind
+   ""
+   "reaction"
+   "self"
+end
+
 local record SceneState
    seed:             integer
    deal:             DealState
@@ -75,9 +81,14 @@ local record SceneState
    clickables: {Clickable}
    -- Tick-keyed cache for compute_seat1_*_options. See options_cached.
    cached_opts_tick:   integer
-   cached_opts_kind:   string    -- "" | "reaction" | "self"
+   cached_opts_kind:   CachedOptsKind
    cached_opts_cursor: TileId
    cached_opts:        {ActionPromptOption}
+   -- Tick-keyed cache for opening_action_by_payload("swap_tiles"). The
+   -- enumeration of effect actions runs the full effect runner; without
+   -- the cache it fires 3× per frame during opening_actions phase.
+   cached_swap_tiles_tick: integer
+   cached_swap_tiles_has:  boolean
 end
 
 local state: SceneState = nil
@@ -158,6 +169,8 @@ local function reset(seed: integer)
       cached_opts_kind   = "",
       cached_opts_cursor = "" as TileId,
       cached_opts        = {},
+      cached_swap_tiles_tick = -1,
+      cached_swap_tiles_has  = false,
    }
    push_log("sys", "deal opened (seed=" .. tostring(effective_seed) .. " mode=" .. mode .. ")")
    check_conservation()
@@ -198,6 +211,20 @@ local function opening_action_by_payload(payload_kind: string): EffectAction, bo
       if a.payload_kind == payload_kind then return a, true end
    end
    return {} as EffectAction, false
+end
+
+-- Tick-keyed cached predicate for "is the Fresh Start swap_tiles action
+-- available?" The render path asks this 3× per frame in opening_actions
+-- phase (hand row, center info, hint line); the cache collapses those
+-- to a single effect-runner enumeration per tick.
+local function has_swap_tiles_action(): boolean
+   if state.cached_swap_tiles_tick == state.ticks then
+      return state.cached_swap_tiles_has
+   end
+   local _, ok = opening_action_by_payload("swap_tiles")
+   state.cached_swap_tiles_tick = state.ticks
+   state.cached_swap_tiles_has  = ok
+   return ok
 end
 
 local function clear_opening_selection()
@@ -312,30 +339,9 @@ end
 
 -- Forward decls; bodies below.
 local compute_seat1_reaction_options: function(d: DealState): {ActionPromptOption}
-local options_cached:                 function(d: DealState, kind: string): {ActionPromptOption}
+local options_cached:                 function(d: DealState, kind: CachedOptsKind): {ActionPromptOption}
 
--- True iff declaring Hu with `incoming_tile` as the winning tile would
--- pass the engine's fan threshold. Routes through the shared scoring
--- pipeline so the player's Hu prompt cannot drift from the engine.
-local function would_be_valid_hu(d: DealState, seat: integer, incoming_tile: Tile, is_zi_mo: boolean, is_qiang_gang: boolean): boolean
-   local p = d.players[seat]
-   local concealed: {Tile}
-   if is_zi_mo then
-      concealed = {}
-      local removed = false
-      for _, t in ipairs(p.hand.concealed_tiles) do
-         if not removed and t.tile_id == incoming_tile.tile_id then
-            removed = true
-         else
-            concealed[#concealed + 1] = t
-         end
-      end
-   else
-      concealed = p.hand.concealed_tiles
-   end
-   local valid, _ = scoring.evaluate_hu(d, seat, concealed, incoming_tile, is_zi_mo, false, is_qiang_gang)
-   return valid
-end
+local would_be_valid_hu = scoring.would_be_valid_hu
 
 -- True when run mode and seat 1 must make a decision the AI shouldn't
 -- make for them. The auto-advance path stops here. Skip the pause when
@@ -547,7 +553,7 @@ end
 -- 3-5 times per frame in M.update / M.draw / draw_hints. The result
 -- only changes on engine transitions (ticks bump) or, for "self", when
 -- the cursor moves.
-function options_cached(d: DealState, kind: string): {ActionPromptOption}
+function options_cached(d: DealState, kind: CachedOptsKind): {ActionPromptOption}
    local cursor = state.cursor_tile_id
    if state.cached_opts_tick == state.ticks
       and state.cached_opts_kind == kind
@@ -748,11 +754,16 @@ local SEAT_NAMES: {string} = { "East (P1)", "South (P2)", "West (P3)", "North (P
 
 -- Per-seat discard color (used to tint each tile's border in the center
 -- discard pile so players can see at a glance who threw what).
-local SEAT_COLORS: {{number}} = {
-   { 0.42, 0.62, 0.95 },  -- P1 East   = blue (you)
-   { 0.95, 0.45, 0.40 },  -- P2 South  = red
-   { 0.55, 0.85, 0.50 },  -- P3 West   = green
-   { 0.95, 0.85, 0.40 },  -- P4 North  = gold
+local record SeatColor
+   r: number
+   g: number
+   b: number
+end
+local SEAT_COLORS: {SeatColor} = {
+   { r = 0.42, g = 0.62, b = 0.95 },  -- P1 East   = blue (you)
+   { r = 0.95, g = 0.45, b = 0.40 },  -- P2 South  = red
+   { r = 0.55, g = 0.85, b = 0.50 },  -- P3 West   = green
+   { r = 0.95, g = 0.85, b = 0.40 },  -- P4 North  = gold
 }
 
 local function draw_text(text: string, x: number, y: number)
@@ -1012,7 +1023,7 @@ local function draw_center_discard_pile(x: number, y: number, w: number, h: numb
 
       local color = SEAT_COLORS[item.seat]
       tile_render.draw_tile_box(item.tile, tx, ty, tile_w, tile_h,
-         0.94, 0.92, 0.84, color[1], color[2], color[3])
+         0.94, 0.92, 0.84, color.r, color.g, color.b)
    end
 end
 
@@ -1052,11 +1063,7 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
    -- Tile click in opening_actions only toggles Fresh Start selection
    -- when the Fresh Start swap_tiles action is actually available
    -- (i.e., the player took the Fresh Start boon and hasn't used it).
-   local can_click_swap = false
-   if phase == "opening_actions" then
-      local _, ok = opening_action_by_payload("swap_tiles")
-      can_click_swap = ok
-   end
+   local can_click_swap = phase == "opening_actions" and has_swap_tiles_action()
 
    local idxs = sorted_indices(tiles)
    for slot, src_i in ipairs(idxs) do
@@ -1135,7 +1142,7 @@ local function draw_center_info(x: number, y: number, w: number, h: number)
    local ty = y + 10
 
    if (d.phase as string) == "opening_actions" then
-      local _, has_fresh_start = opening_action_by_payload("swap_tiles")
+      local has_fresh_start = has_swap_tiles_action()
       local surplus = #d.players[d.dealer].hand.concealed_tiles - 13
 
       love.graphics.setColor(1.0, 0.92, 0.40, 1.0)
@@ -1300,8 +1307,7 @@ end
 local function draw_hints(x: number, y: number)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
    if (state.deal.phase as string) == "opening_actions" then
-      local _, has_fresh_start = opening_action_by_payload("swap_tiles")
-      if has_fresh_start then
+      if has_swap_tiles_action() then
          draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   F1 debug   ESC quit", x, y)
       else
          draw_text("Click Confirm to begin play   /   F1 debug   ESC quit", x, y)
@@ -1409,7 +1415,7 @@ function M.draw()
    if has_seat1_pending_input(state.deal) then
       local d = state.deal
       local phase = d.phase as string
-      local kind = phase == "reaction_window" and "reaction" or "self"
+      local kind: CachedOptsKind = phase == "reaction_window" and "reaction" or "self"
       local opts = options_cached(d, kind)
       local title = kind == "reaction" and "Reaction — choose an action" or "Your turn"
       local panel_w = math.min(360, center_w - 16)

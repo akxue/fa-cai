@@ -14,7 +14,6 @@
 require("core.types")
 require("game.deal_types")
 local engine     = require("game.deal_engine")
-local validator  = require("game.hand_validator")
 local calls_mod  = require("game.calls")
 local td         = require("game.ting_distance")
 local scoring    = require("game.scoring")
@@ -56,8 +55,7 @@ local POST_CALL_FAN_FLOOR <const>: integer = 3
 -- bottom of this file so existing callers (table_scene, tests) keep
 -- working through the ai.tl boundary.
 
-local build_score_ctx = scoring.build_score_ctx
-local evaluate_hu     = scoring.evaluate_hu
+local evaluate_hu = scoring.evaluate_hu
 
 -- ── Tile-list helpers ─────────────────────────────────────────────────────
 

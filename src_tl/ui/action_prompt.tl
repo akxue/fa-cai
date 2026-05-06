@@ -17,7 +17,7 @@ global record ActionPromptOption
                         -- constructs at dispatch time
 end
 
-global record OptionRect
+local record OptionRect
    x: number
    y: number
    w: number

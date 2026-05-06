@@ -17,7 +17,7 @@ local state: StartState = nil
 
 local MENU_LABELS: {string} = {
    "Start Run",
-   "Debug Table (S05)",
+   "Debug Table",
    "Quit",
 }
 
@@ -36,7 +36,7 @@ local function activate(idx: integer)
    local choice = MENU_LABELS[idx]
    if choice == "Start Run" then
       scene_stack.push(boon_select_scene as Scene)
-   elseif choice == "Debug Table (S05)" then
+   elseif choice == "Debug Table" then
       scene_stack.replace(table_scene as Scene)
    elseif choice == "Quit" then
       love.event.quit(0)
