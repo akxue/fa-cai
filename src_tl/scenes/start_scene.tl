@@ -78,8 +78,8 @@ function M.draw()
    love.graphics.print("click to choose   /   up-down + enter also work   /   esc quits", 40, 280)
 end
 
-function M.mousepressed(x: number, y: number, button: integer)
-   if button ~= 1 then return end
+function M.mousepressed(x: number, y: number, mouse_button: integer)
+   if mouse_button ~= 1 then return end
    local hit = clickable_mod.find(state.clickables, x, y)
    if hit ~= nil then hit.callback() end
 end
