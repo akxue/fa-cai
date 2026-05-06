@@ -13,8 +13,12 @@ global record Clickable
    callback: function()
 end
 
+-- Iterates back-to-front so later-registered (visually-on-top)
+-- clickables win on overlap. Scenes register in draw order, so reverse
+-- iteration here keeps that order meaningful for hit testing.
 function M.find(list: {Clickable}, x: number, y: number): Clickable
-   for _, c in ipairs(list) do
+   for i = #list, 1, -1 do
+      local c = list[i]
       if x >= c.x and x <= c.x + c.w and y >= c.y and y <= c.y + c.h then
          return c
       end
