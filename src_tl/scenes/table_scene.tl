@@ -818,7 +818,14 @@ local function draw_text_wrapped(text: string, x: number, y: number, limit: numb
    return n * font:getHeight()
 end
 
-local draw_panel = panel.draw
+local draw_panel       = panel.draw
+local draw_panel_alpha = panel.draw_alpha
+
+-- Hand strips (player + opponents) use a translucent fill so the bg
+-- table image (and its compass medallion) shows through. Tuned by eye
+-- — fully transparent makes seat titles unreadable; full opacity hides
+-- the felt entirely.
+local HAND_PANEL_ALPHA <const>: number = 0.55
 
 local function opening_selection_label(): string
    if #state.selected_opening_tile_ids == 0 then return "(none)" end
@@ -888,7 +895,7 @@ end
 
 local function draw_opponent_hand_row(seat_index: integer, x: number, y: number, w: number, h: number)
    local p = state.deal.players[seat_index]
-   draw_panel(x, y, w, h, title_with_marker(seat_index))
+   draw_panel_alpha(x, y, w, h, title_with_marker(seat_index), HAND_PANEL_ALPHA)
    local n = #p.hand.concealed_tiles
    if n == 0 then return end
 
@@ -920,7 +927,7 @@ end
 
 local function draw_opponent_hand_col(seat_index: integer, x: number, y: number, w: number, h: number)
    local p = state.deal.players[seat_index]
-   draw_panel(x, y, w, h, title_with_marker(seat_index))
+   draw_panel_alpha(x, y, w, h, title_with_marker(seat_index), HAND_PANEL_ALPHA)
    local n = #p.hand.concealed_tiles
    if n == 0 then return end
 
@@ -953,7 +960,7 @@ end
 -- claimed groupings are visible adjacent to the seat that owns them.
 
 local function draw_seat_open_sets_row(seat_index: integer, x: number, y: number, w: number, h: number)
-   draw_panel(x, y, w, h, "")
+   draw_panel_alpha(x, y, w, h, "", HAND_PANEL_ALPHA)
    local p = state.deal.players[seat_index]
    if #p.hand.sets == 0 then return end
    local pad = 8
@@ -973,7 +980,7 @@ local function draw_seat_open_sets_row(seat_index: integer, x: number, y: number
 end
 
 local function draw_seat_open_sets_col(seat_index: integer, x: number, y: number, w: number, h: number)
-   draw_panel(x, y, w, h, "")
+   draw_panel_alpha(x, y, w, h, "", HAND_PANEL_ALPHA)
    local p = state.deal.players[seat_index]
    if #p.hand.sets == 0 then return end
    local pad = 8
@@ -1069,7 +1076,7 @@ end
 -- Fresh Start selection highlight (yellow border) still draw so the
 -- keyboard fallback flow remains discoverable.
 local function draw_player_hand_row(x: number, y: number, w: number, h: number)
-   draw_panel(x, y, w, h, "Your Hand")
+   draw_panel_alpha(x, y, w, h, "Your Hand", HAND_PANEL_ALPHA)
    local d = state.deal
    local p = d.players[1]
    local tiles = p.hand.concealed_tiles
@@ -1369,7 +1376,10 @@ end
 local FELT_LEFT_PX   <const>: number = 280
 local FELT_RIGHT_PX  <const>: number = 1380
 local FELT_TOP_PX    <const>: number = 95
-local FELT_BOTTOM_PX <const>: number = 700
+-- Pushed past the visible felt center so the player's hand sits at the
+-- table's bottom edge (resting on the wood frame) instead of floating
+-- above the green.
+local FELT_BOTTOM_PX <const>: number = 760
 local BG_IMG_W       <const>: number = 1672
 local BG_IMG_H       <const>: number = 941
 
