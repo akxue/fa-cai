@@ -14,12 +14,9 @@
 require("core.types")
 require("game.deal_types")
 local engine     = require("game.deal_engine")
-local validator  = require("game.hand_validator")
-local scorer_mod = require("game.scorer")
 local calls_mod  = require("game.calls")
 local td         = require("game.ting_distance")
-local fx_runner  = require("effects.effect_runner")
-local wall_mod   = require("game.wall")
+local scoring    = require("game.scoring")
 local strategy   = require("game.ai_strategy")
 
 global record AiReasoning
@@ -58,67 +55,7 @@ local POST_CALL_FAN_FLOOR <const>: integer = 3
 -- bottom of this file so existing callers (table_scene, tests) keep
 -- working through the ai.tl boundary.
 
--- ── Score-context builder ──────────────────────────────────────────────────
--- Mirrors deal_engine.build_score_ctx so AI Hu legality matches the engine
--- exactly. is_men_qian is derived from open-set visibility.
-
-local function build_score_ctx(
-   deal:           DealState,
-   player_index:   integer,
-   is_zi_mo:       boolean,
-   is_gang_shang:  boolean,
-   is_qiang_gang:  boolean
-): ScoreContext
-   local open_sets = deal.players[player_index].hand.sets
-   local is_men_qian = true
-   for _, s in ipairs(open_sets) do
-      if (s.visibility as string) == "open" then
-         is_men_qian = false
-         break
-      end
-   end
-   local is_hai_di = is_zi_mo and wall_mod.remaining(deal.wall) == 0
-   return {
-      incoming_tile = { tile_id = "" as TileId, kind_id = "" as TileKindId },
-      has_incoming  = not is_zi_mo,
-      is_zi_mo      = is_zi_mo,
-      is_men_qian   = is_men_qian,
-      is_hai_di     = is_hai_di,
-      is_gang_shang = is_gang_shang,
-      is_qiang_gang = is_qiang_gang,
-      round_wind    = deal.round_wind,
-      seat_wind     = deal.players[player_index].seat_wind,
-   }
-end
-
--- Runs the same validate-and-score path the engine uses for Hu approval.
--- Returns whether the player would have a valid Hu on `incoming` and the
--- best ScoreResult (after boon score modifiers).
-local function evaluate_hu(
-   deal:           DealState,
-   player_index:   integer,
-   concealed:      {Tile},
-   incoming:       Tile,
-   is_zi_mo:       boolean,
-   is_gang_shang:  boolean,
-   is_qiang_gang:  boolean
-): boolean, ScoreResult
-   local p      = deal.players[player_index]
-   local shapes = validator.find_win_shapes(concealed, incoming, p.hand.sets)
-   local ctx    = build_score_ctx(deal, player_index, is_zi_mo, is_gang_shang, is_qiang_gang)
-   local output = scorer_mod.score_hand(shapes, ctx)
-   if not output.has_best then
-      return false, {} as ScoreResult
-   end
-   local final = fx_runner.apply_score_modifiers(deal, ctx, shapes[1], output.candidates[1], player_index)
-   for i = 2, #output.candidates do
-      local cand = fx_runner.apply_score_modifiers(deal, ctx, shapes[i], output.candidates[i], player_index)
-      local best_rank = final.is_limit and 10000 or final.total_fan
-      local cand_rank = cand.is_limit and 10000 or cand.total_fan
-      if cand_rank > best_rank then final = cand end
-   end
-   return final.valid_hu, final
-end
+local evaluate_hu = scoring.evaluate_hu
 
 -- ── Tile-list helpers ─────────────────────────────────────────────────────
 

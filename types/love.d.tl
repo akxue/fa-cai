@@ -7,11 +7,12 @@ global record Font
 end
 
 global record love
-   load:       function()
-   update:     function(dt: number)
-   draw:       function()
-   keypressed: function(key: string, scancode: string, isrepeat: boolean)
-   quit:       function(): boolean
+   load:         function()
+   update:       function(dt: number)
+   draw:         function()
+   keypressed:   function(key: string, scancode: string, isrepeat: boolean)
+   mousepressed: function(x: number, y: number, button: integer, istouch: boolean, presses: integer)
+   quit:         function(): boolean
 
    record graphics
       print:                function(text: string, x: number, y: number)

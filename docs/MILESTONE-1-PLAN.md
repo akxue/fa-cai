@@ -1741,7 +1741,7 @@ The candidate-pipeline shape is now in place. Future slices can layer:
 
 ### S08: Playable Round 1 UI
 
-Status: `pending`
+Status: `complete (6 commits)`
 
 Goal: turn the debug-playable deal into a human-playable Round 1 flow.
 
@@ -1798,7 +1798,49 @@ Out of scope:
 
 Completion summary:
 
-- Fill this in when the slice is merged.
+- Commit 1 (T01, T02): introduced `src_tl/app/scene_stack.tl` and rewired
+  `main.tl` through it. Added `src_tl/scenes/start_scene.tl` as the
+  initial scene; "Debug Table (S05)" remains accessible from the menu.
+- Commit 2 (T03): `src_tl/scenes/boon_select_scene.tl` with three
+  curated starter offers (Fresh Start, Third Eye, Dragon's Weight).
+  Selection feeds a fresh `RunState` (lives = 3, round 1) into
+  `table_scene.start_run`.
+- Commit 3 (T04): extracted `src_tl/ui/tile_render.tl` (label / set /
+  ordering helpers + `draw_tile_box`) and added a player hand row that
+  renders seat 1's concealed tiles as boxes spanning the full table
+  width below the 3x3 grid. SceneState gains a `mode` flag so debug
+  spectator mode and run mode share the renderer.
+- Commit 4 (T05, T06, T08): seat-1 player input. `M.update` pauses on
+  seat 1's `awaiting_action` and on reaction windows where seat 1 is
+  the next eligible reactor. Cursor navigation (←/→, 1-9 0 q-r), Hu /
+  Peng / Open Kong / Chi (first combo) / Pass on reactions, Zi Mo /
+  Concealed Kong / Added Kong / Discard on own turn. Action prompt
+  panel renders the legal options with their keybinds.
+  `src_tl/ui/action_prompt.tl` exports `ActionPromptOption` + draw
+  helper. The Fresh Start opening tile-swap interaction (T08) was
+  inherited unchanged from S05 since seat 1 is always the dealer.
+- Commit 5 (T07 — known wall + boon counters): `src_tl/ui/info_panels.tl`
+  with `draw_boon_strip` and `draw_known_wall`. Both strips sit above
+  the player hand row in the table layout. Per project direction the
+  scoring explanation is reserved for the reward screen, not surfaced
+  live during play.
+- Commit 6 (T07 reward breakdown, T09, T10): `reward_scene.tl` and
+  `result_scene.tl`. `table_scene` fires `scene_stack.fire_deal_over`
+  when the deal ends; main.tl's installed handler routes to reward
+  (player Hu) or result (otherwise). Result decrements `RunState.lives`
+  and offers retry while lives remain or back-to-start when they don't.
+  Cross-scene transitions go through three `scene_stack.fire_*`
+  handlers installed by `main.tl`, which is the only module that
+  statically imports every scene; this avoids cycles like
+  `table_scene → reward_scene → start_scene → boon_select_scene → table_scene`.
+
+Verification:
+
+- `make check`, `make build`, `make test` → 206/206 pass on each commit.
+- `make playtest` (AI vs AI) holds at 8/10 Hu, identical to the S07
+  merge tip — playtest does not go through `table_scene`, so seat-1
+  player gating does not affect it.
+- LÖVE manual smoke: deferred to the integration pass in S09.
 
 ### S09: Milestone 1 Integration And Playtest Pass
 
