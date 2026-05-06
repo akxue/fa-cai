@@ -1556,18 +1556,16 @@ local function on_draw()
    local pile_y = center_y + info_h + 4
 
    -- Discard layout: per-seat strips around a central compass area.
-   -- The horizontal strips (P1 / P3) are kept intentionally short; in a
-   -- typical deal each seat discards 13-20 tiles, which fits one row
-   -- given compass_w. Squeezing strip_thick_h gives the vertical strips
-   -- (P2 / P4) more room — the side seats' tiles read at a comfortable
-   -- size and the cols stop wrapping into a second column early.
-   local strip_thick_h <const>: number = 42
-   local strip_thick_w <const>: number = 54
+   -- The vertical P2 / P4 strips span the full pile height (top of P3
+   -- hand to bottom of P1 hand). The horizontal P3 / P1 strips live
+   -- only inside the inner compass column — flanked by the cols, not
+   -- spanning over them. Net effect: P2 / P4 get a tall, comfortable
+   -- discard area; P3 / P1 get a narrower one constrained to the
+   -- compass middle (still wide enough for a deal's worth of tiles).
+   local strip_thick_h <const>: number = 76   -- fits 2 rows of 34-tall tiles for late-deal overflow
+   local strip_thick_w <const>: number = 56
    local p3_disc_y = pile_y
    local p1_disc_y = pile_y + pile_h - strip_thick_h
-   local middle_y  = pile_y + strip_thick_h
-   local middle_h  = pile_h - 2 * strip_thick_h
-   if middle_h < 0 then middle_h = 0 end
 
    local p4_disc_x = center_x
    local p2_disc_x = center_x + center_w - strip_thick_w
@@ -1575,10 +1573,13 @@ local function on_draw()
    local compass_w = center_w - 2 * strip_thick_w
    if compass_w < 0 then compass_w = 0 end
 
+   -- P2 / P4 cols span the full pile_h; the corners "behind" the P3 /
+   -- P1 row positions are simply unused col-strip area (no overlap
+   -- because compass_x is offset by strip_thick_w from center_x).
+   draw_seat_discard_strip(4, p4_disc_x,    pile_y,    strip_thick_w, pile_h,        "col_left")
+   draw_seat_discard_strip(2, p2_disc_x,    pile_y,    strip_thick_w, pile_h,        "col_right")
    draw_seat_discard_strip(3, compass_x,    p3_disc_y, compass_w,     strip_thick_h, "row_top")
    draw_seat_discard_strip(1, compass_x,    p1_disc_y, compass_w,     strip_thick_h, "row_bottom")
-   draw_seat_discard_strip(4, p4_disc_x,    middle_y,  strip_thick_w, middle_h,      "col_left")
-   draw_seat_discard_strip(2, p2_disc_x,    middle_y,  strip_thick_w, middle_h,      "col_right")
 
    -- Outer bottom strip — between the felt's bottom edge and the hint
    -- line. Hosts boons (left), action buttons (center), known wall
