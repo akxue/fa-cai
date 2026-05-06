@@ -16,6 +16,7 @@ local run_state     = require("game.run_state")
 local rng_mod       = require("core.rng")
 local boons_init    = require("effects.boons.init")
 local clickable_mod = require("ui.clickable")
+local assets        = require("app.assets")
 
 local CURATED_BOON_IDS: {string} = { "fresh_start", "third_eye", "dragons_weight" }
 
@@ -51,6 +52,7 @@ local function start_run_with(boon_id: string)
 end
 
 local function on_draw()
+   assets.draw_bg_dimmed(0.55)
    love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
    love.graphics.print("Choose a starter boon", 40, 30)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)

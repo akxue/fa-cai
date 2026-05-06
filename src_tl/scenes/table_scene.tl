@@ -1386,18 +1386,11 @@ local function on_draw()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
 
-   -- Background image as cover-fit. setBackgroundColor handles whatever
+   -- Background image as cover-fit. setBackgroundColor paints whatever
    -- the cover-fit doesn't reach (rare with a 1672x941 source) so the
    -- window never paints fuchsia at the edges.
    love.graphics.setBackgroundColor(0.13, 0.16, 0.18, 1.0)
-   local bg = assets.bg_table()
-   if bg ~= nil then
-      local scale = math.max(sw / BG_IMG_W, sh / BG_IMG_H)
-      local off_x = (sw - BG_IMG_W * scale) / 2
-      local off_y = (sh - BG_IMG_H * scale) / 2
-      love.graphics.setColor(1, 1, 1, 1)
-      love.graphics.draw(bg, off_x, off_y, 0, scale, scale)
-   end
+   assets.draw_bg_cover()
 
    -- Keep the cursor pointing at a real tile; this also runs in update
    -- and keypressed but we re-check here so click-only flows have a

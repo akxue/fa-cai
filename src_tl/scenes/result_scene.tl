@@ -13,6 +13,7 @@ require("app.scene_stack")
 local scene_stack   = require("app.scene_stack")
 local clickable_mod = require("ui.clickable")
 local button        = require("ui.button")
+local assets        = require("app.assets")
 
 local record ResultState
    run_state:     RunState
@@ -46,6 +47,7 @@ local function draw_button(label: string, x: number, y: number, w: number, h: nu
 end
 
 local function on_draw()
+   assets.draw_bg_dimmed(0.55)
    state.clickables = {}
    if state.run_state == nil then
       love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
