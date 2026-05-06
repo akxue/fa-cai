@@ -21,11 +21,12 @@ Add that line to your shell config (`~/.zshrc` or `~/.bashrc`) to make it perman
 ## Commands
 
 ```sh
-make check   # Teal typecheck
-make build   # Compile Teal → Lua
-make test    # Build and run busted specs
-make run     # Build and launch LÖVE
-make clean   # Remove generated Lua
+make check     # Teal typecheck
+make build     # Compile Teal → Lua
+make test      # Build and run busted specs
+make run       # Build and launch LÖVE — title screen → boon select → Round 1
+make playtest  # Headless AI-vs-AI harness (10 deterministic seeds)
+make clean     # Remove generated Lua
 ```
 
 ## Repository Structure
@@ -57,4 +58,4 @@ docs/        # design, plans, and agent guidance
 
 ## Status
 
-Milestone 1 in progress. S00 (toolchain and repo skeleton) complete.
+Milestone 1 in progress. Slices S00–S08 are complete (toolchain, core types, rules engine, effects, AI, playable Round 1 UI). S09 (integration + playtest pass) is the active slice.

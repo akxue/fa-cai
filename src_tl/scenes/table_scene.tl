@@ -192,7 +192,26 @@ local function is_excluded(deal: DealState, player_index: integer): boolean
    return false
 end
 
+-- Picks the next reactor for the AI driver to advance. In run mode AI
+-- reactors (seats 2-4) respond before the player so the visible reaction
+-- order matches HK mahjong's priority: opponents declare Peng/Kong/Hu
+-- first, and only after they pass does the next player get the Chi
+-- prompt. The engine resolves correctly either way (pending_claims is
+-- collected before resolve_window picks a winner), but offering the
+-- player Chi too early caused confusion when an AI then queued a Peng
+-- that won at resolve time.
 local function next_eligible_reactor(deal: DealState): integer
+   if state.mode == "run" then
+      for i = 2, 4 do
+         if not is_excluded(deal, i) and not has_responded(deal, i) then
+            return i
+         end
+      end
+      if not is_excluded(deal, 1) and not has_responded(deal, 1) then
+         return 1
+      end
+      return 0
+   end
    for i = 1, 4 do
       if not is_excluded(deal, i) and not has_responded(deal, i) then
          return i
@@ -344,15 +363,21 @@ local would_be_valid_hu = scoring.would_be_valid_hu
 -- True when run mode and seat 1 must make a decision the AI shouldn't
 -- make for them. The auto-advance path stops here. Skip the pause when
 -- the only legal reaction is Pass — the AI driver auto-passes for
--- seat 1 in that case so the player isn't bothered.
+-- seat 1 in that case so the player isn't bothered. During the reaction
+-- window we also wait for AI reactors (seats 2-4) to respond first;
+-- that way the player's Chi prompt isn't shown only to be silently
+-- overridden when an AI then queues a Peng. See next_eligible_reactor.
 local function has_seat1_pending_input(d: DealState): boolean
    if state.mode ~= "run" then return false end
    local phase = d.phase as string
    if phase == "awaiting_action" and d.current_player == 1 then return true end
-   if seat1_can_react(d) then
-      return #options_cached(d, "reaction") > 1
+   if not seat1_can_react(d) then return false end
+   for seat = 2, 4 do
+      if not is_excluded(d, seat) and not has_responded(d, seat) then
+         return false
+      end
    end
-   return false
+   return #options_cached(d, "reaction") > 1
 end
 
 local function default_cursor_tile_id(d: DealState): TileId
@@ -445,7 +470,13 @@ function compute_seat1_reaction_options(d: DealState): {ActionPromptOption}
             action     = engine.declare_open_kong(1, pd.tile.tile_id),
          }
       end
-      if calls_mod.is_next_player(pd.discarder, 1, 4) then
+      -- Chi is the lowest reaction priority and loses to any other
+      -- queued claim. By the time seat 1 is prompted, AI reactors have
+      -- already responded (see has_seat1_pending_input), so a non-empty
+      -- pending_claims list means a higher-priority claim is locked in.
+      -- Hiding Chi here prevents the player from clicking it just to
+      -- watch the engine pick the AI's Peng/Kong/Hu instead.
+      if #d.pending_claims == 0 and calls_mod.is_next_player(pd.discarder, 1, 4) then
          local combos = calls_mod.chi_combinations(pd.tile, hand)
          if #combos > 0 then
             opts[#opts + 1] = {
@@ -670,7 +701,12 @@ end
 
 local function on_keypressed(key: string)
    if key == "escape" then
-      love.event.quit(0)
+      -- Abandon the deal and return to the title screen. Mirrors the
+      -- "Quit run" button on result_scene — no life is decremented; the
+      -- run is simply discarded. ESC quitting the application from
+      -- mid-deal was the legacy debug-table behavior; it surprised
+      -- players who expected ESC to mean "back/cancel."
+      scene_stack.fire_back_to_start()
       return
    end
    if key == "f1" then
@@ -1306,18 +1342,18 @@ local function draw_hints(x: number, y: number)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
    if (state.deal.phase as string) == "opening_actions" then
       if has_swap_tiles_action() then
-         draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   F1 debug   ESC quit", x, y)
+         draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   F1 debug   ESC menu", x, y)
       else
-         draw_text("Click Confirm to begin play   /   F1 debug   ESC quit", x, y)
+         draw_text("Click Confirm to begin play   /   F1 debug   ESC menu", x, y)
       end
    elseif state.mode == "run" and has_seat1_pending_input(state.deal) then
       if (state.deal.phase as string) == "awaiting_action" and state.deal.current_player == 1 then
-         draw_text("Click a tile to select, click again to discard   /   buttons: Hu / Kong / Discard   /   F1 debug   ESC quit", x, y)
+         draw_text("Click a tile to select, click again to discard   /   buttons: Hu / Kong / Discard   /   F1 debug   ESC menu", x, y)
       else
-         draw_text("Click an action button   /   keys: H P K C X   /   F1 debug   ESC quit", x, y)
+         draw_text("Click an action button   /   keys: H P K C X   /   F1 debug   ESC menu", x, y)
       end
    else
-      draw_text("F1 debug overlay   /   T step  S advance  R restart   /   ESC quit", x, y)
+      draw_text("F1 debug overlay   /   T step  S advance  R restart   /   ESC menu", x, y)
    end
 end
 
