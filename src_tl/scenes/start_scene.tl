@@ -21,29 +21,27 @@ local MENU_LABELS: {string} = {
    "Quit",
 }
 
-local M = {}
-
-function M.load()
+local function on_load()
    love.graphics.setBackgroundColor(0.10, 0.10, 0.12, 1.0)
    state = { selected = 1, clickables = {} }
 end
 
-function M.update(_dt: number)
+local function on_update(_dt: number)
 end
 
 local function activate(idx: integer)
    state.selected = idx
    local choice = MENU_LABELS[idx]
    if choice == "Start Run" then
-      scene_stack.push(boon_select_scene as Scene)
+      scene_stack.push(boon_select_scene)
    elseif choice == "Debug Table" then
-      scene_stack.replace(table_scene as Scene)
+      scene_stack.replace(table_scene.scene)
    elseif choice == "Quit" then
       love.event.quit(0)
    end
 end
 
-function M.draw()
+local function on_draw()
    love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
    love.graphics.print("facai", 40, 30)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
@@ -78,13 +76,13 @@ function M.draw()
    love.graphics.print("click to choose   /   up-down + enter also work   /   esc quits", 40, 280)
 end
 
-function M.mousepressed(x: number, y: number, mouse_button: integer)
+local function on_mousepressed(x: number, y: number, mouse_button: integer)
    if mouse_button ~= 1 then return end
    local hit = clickable_mod.find(state.clickables, x, y)
    if hit ~= nil then hit.callback() end
 end
 
-function M.keypressed(key: string)
+local function on_keypressed(key: string)
    if key == "escape" then
       love.event.quit(0)
       return
@@ -105,4 +103,4 @@ function M.keypressed(key: string)
    end
 end
 
-return M
+return scene_stack.make_scene(on_load, on_update, on_draw, on_keypressed, on_mousepressed)

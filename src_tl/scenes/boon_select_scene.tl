@@ -27,9 +27,7 @@ end
 
 local state: BoonSelectState = nil
 
-local M = {}
-
-function M.load()
+local function on_load()
    love.graphics.setBackgroundColor(0.10, 0.10, 0.12, 1.0)
    boons_init.reset_and_register_all()
    local offers: {BoonContent} = {}
@@ -40,7 +38,7 @@ function M.load()
    state = { selected = 1, offers = offers, clickables = {} }
 end
 
-function M.update(_dt: number)
+local function on_update(_dt: number)
 end
 
 local function start_run_with(boon_id: string)
@@ -49,10 +47,10 @@ local function start_run_with(boon_id: string)
    local rs = run_state.new_run(rng)
    rs.active_effects = { content.activate_for(boon_id, 1) }
    table_scene.start_run(rs, seed)
-   scene_stack.replace(table_scene as Scene)
+   scene_stack.replace(table_scene.scene)
 end
 
-function M.draw()
+local function on_draw()
    love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
    love.graphics.print("Choose a starter boon", 40, 30)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
@@ -92,13 +90,13 @@ function M.draw()
    love.graphics.print("click to choose   /   up-down + enter also work   /   esc back", 40, 90 + #state.offers * 96 + 20)
 end
 
-function M.mousepressed(x: number, y: number, mouse_button: integer)
+local function on_mousepressed(x: number, y: number, mouse_button: integer)
    if mouse_button ~= 1 then return end
    local hit = clickable_mod.find(state.clickables, x, y)
    if hit ~= nil then hit.callback() end
 end
 
-function M.keypressed(key: string)
+local function on_keypressed(key: string)
    if key == "escape" then
       scene_stack.pop()
       return
@@ -120,4 +118,4 @@ function M.keypressed(key: string)
    end
 end
 
-return M
+return scene_stack.make_scene(on_load, on_update, on_draw, on_keypressed, on_mousepressed)

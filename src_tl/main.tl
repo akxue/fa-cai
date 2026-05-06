@@ -18,13 +18,13 @@ local function on_deal_over(d: DealState, rs: RunState)
    if not d.has_deal_result then
       if rs ~= nil then rs.lives = rs.lives - 1 end
       result_scene.start(rs, "Deal ended without result.")
-      scene_stack.replace(result_scene as Scene)
+      scene_stack.replace(result_scene.scene)
       return
    end
    local res = d.deal_result
    if res.winner_player_index == 1 then
       reward_scene.start(res.score_result, res.has_score_result, res.won_by_zi_mo)
-      scene_stack.replace(reward_scene as Scene)
+      scene_stack.replace(reward_scene.scene)
       return
    end
    if rs ~= nil then rs.lives = rs.lives - 1 end
@@ -36,18 +36,18 @@ local function on_deal_over(d: DealState, rs: RunState)
       label = "Wall exhausted with no winner."
    end
    result_scene.start(rs, label)
-   scene_stack.replace(result_scene as Scene)
+   scene_stack.replace(result_scene.scene)
 end
 
 local function on_retry(rs: RunState)
    local seed = os.time() as integer
    rs.rng = rng_mod.from_seed(seed)
    table_scene.start_run(rs, seed)
-   scene_stack.replace(table_scene as Scene)
+   scene_stack.replace(table_scene.scene)
 end
 
 local function on_back_to_start()
-   scene_stack.reset_to(start_scene as Scene)
+   scene_stack.reset_to(start_scene)
 end
 
 function love.load()
@@ -56,7 +56,7 @@ function love.load()
    scene_stack.set_deal_over_handler(on_deal_over)
    scene_stack.set_retry_handler(on_retry)
    scene_stack.set_back_to_start_handler(on_back_to_start)
-   scene_stack.push(start_scene as Scene)
+   scene_stack.push(start_scene)
 end
 
 function love.update(dt: number)

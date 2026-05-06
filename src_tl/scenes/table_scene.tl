@@ -29,8 +29,6 @@ local button        = require("ui.button")
 local scoring       = require("game.scoring")
 local scene_stack   = require("app.scene_stack")
 
-local M = {}
-
 -- ── Tunables ──────────────────────────────────────────────────────────────
 
 local AI_PACE_AUTO    <const> = 0.20    -- seconds between AI actions in auto mode
@@ -128,7 +126,7 @@ local pending_run: RunState = nil
 local pending_seed: integer = 0
 local has_pending: boolean = false
 
-function M.start_run(rs: RunState, seed: integer)
+local function start_run(rs: RunState, seed: integer)
    pending_run = rs
    pending_seed = seed
    has_pending = true
@@ -636,11 +634,11 @@ end
 
 -- ── LÖVE lifecycle ────────────────────────────────────────────────────────
 
-function M.load()
+local function on_load()
    reset(DEFAULT_SEED)
 end
 
-function M.update(dt: number)
+local function on_update(dt: number)
    if state.deal == nil then return end
    if (state.deal.phase as string) == "deal_over" then
       if state.mode == "run" then
@@ -663,14 +661,14 @@ function M.update(dt: number)
    if state.step_mode then state.wait_for_step = true end
 end
 
-function M.mousepressed(x: number, y: number, mouse_button: integer)
+local function on_mousepressed(x: number, y: number, mouse_button: integer)
    if mouse_button ~= 1 then return end
    if state.deal == nil then return end
    local hit = clickable_mod.find(state.clickables, x, y)
    if hit ~= nil then hit.callback() end
 end
 
-function M.keypressed(key: string)
+local function on_keypressed(key: string)
    if key == "escape" then
       love.event.quit(0)
       return
@@ -1327,7 +1325,7 @@ local function dispatch_option(opt: ActionPromptOption)
    apply_player_action(opt.action, opt.label)
 end
 
-function M.draw()
+local function on_draw()
    love.graphics.setBackgroundColor(0.10, 0.10, 0.12, 1.0)
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
@@ -1450,4 +1448,7 @@ function M.draw()
    draw_hints(margin, sh - hint_h)
 end
 
-return M
+return {
+   scene     = scene_stack.make_scene(on_load, on_update, on_draw, on_keypressed, on_mousepressed),
+   start_run = start_run,
+}

@@ -57,6 +57,27 @@ function M.fire_back_to_start()
    back_to_start_handler()
 end
 
+-- Constructs a Scene from the five required callbacks. Positional
+-- arguments mean Teal flags an arity error at the call site if a scene
+-- forgets a method — record literals don't enforce field completeness,
+-- so this is the load-bearing compile-time guarantee that scenes
+-- conform to the Scene contract.
+function M.make_scene(
+   load_fn:         function(),
+   update_fn:       function(dt: number),
+   draw_fn:         function(),
+   keypressed_fn:   function(key: string),
+   mousepressed_fn: function(x: number, y: number, button: integer)
+): Scene
+   return {
+      load         = load_fn,
+      update       = update_fn,
+      draw         = draw_fn,
+      keypressed   = keypressed_fn,
+      mousepressed = mousepressed_fn,
+   }
+end
+
 function M.push(s: Scene)
    stack[#stack + 1] = s
    s.load()

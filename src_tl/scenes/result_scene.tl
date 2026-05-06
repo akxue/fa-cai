@@ -20,34 +20,32 @@ local record ResultState
    clickables:    {Clickable}
 end
 
--- Caller sets state via M.start before scene_stack pushes the scene;
--- M.load only handles LÖVE state setup and a defensive empty-state
+-- Caller sets state via start() before scene_stack pushes the scene;
+-- on_load only handles LÖVE state setup and a defensive empty-state
 -- fallback for the "scene shown without start" case.
 local state: ResultState = nil
 
-local M = {}
-
 -- Caller should already have decremented run_state.lives. The scene only
 -- displays the post-decrement state and routes the retry/end flow.
-function M.start(rs: RunState, outcome_label: string)
+local function start(rs: RunState, outcome_label: string)
    state = { run_state = rs, outcome_label = outcome_label, clickables = {} }
 end
 
-function M.load()
+local function on_load()
    love.graphics.setBackgroundColor(0.12, 0.10, 0.10, 1.0)
    if state == nil then
       state = { run_state = nil, outcome_label = "", clickables = {} }
    end
 end
 
-function M.update(_dt: number)
+local function on_update(_dt: number)
 end
 
 local function draw_button(label: string, x: number, y: number, w: number, h: number, accent_r: number, accent_g: number, accent_b: number, callback: function())
    button.draw(label, x, y, w, h, accent_r, accent_g, accent_b, state.clickables, callback)
 end
 
-function M.draw()
+local function on_draw()
    state.clickables = {}
    if state.run_state == nil then
       love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
@@ -80,13 +78,13 @@ function M.draw()
    end
 end
 
-function M.mousepressed(x: number, y: number, mouse_button: integer)
+local function on_mousepressed(x: number, y: number, mouse_button: integer)
    if mouse_button ~= 1 then return end
    local hit = clickable_mod.find(state.clickables, x, y)
    if hit ~= nil then hit.callback() end
 end
 
-function M.keypressed(key: string)
+local function on_keypressed(key: string)
    if key == "escape" then
       scene_stack.fire_back_to_start()
       return
@@ -102,4 +100,7 @@ function M.keypressed(key: string)
    end
 end
 
-return M
+return {
+   scene = scene_stack.make_scene(on_load, on_update, on_draw, on_keypressed, on_mousepressed),
+   start = start,
+}
