@@ -1000,72 +1000,60 @@ local function draw_seat_open_sets_col(seat_index: integer, x: number, y: number
    end
 end
 
--- Center discard pile. Iterates discards round-robin (P1[i], P2[i],
--- P3[i], P4[i], P1[i+1], …) so the draw-order approximates the actual
--- chronology — later tiles render on top of earlier ones, like a real
--- pile. Each tile lands at a deterministic pseudo-random offset within
--- a bounded pile region so tiles cluster and overlap; the border color
--- still identifies the discarder.
-local function draw_center_discard_pile(x: number, y: number, w: number, h: number)
-   love.graphics.setColor(0.13, 0.16, 0.18, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(0.30, 0.32, 0.36, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
+-- Per-seat discard strip. Each player's discards lay out in a clean
+-- grid that grows from their edge of the center toward the compass
+-- medallion (so newer tiles end up nearer the middle). Replaces the
+-- earlier organic-pile look — see the inspiration mock for the four
+-- rivers-around-compass arrangement.
+--
+-- orientation:
+--   "row_top"    — tiles flow left-to-right, rows stack DOWN from y
+--   "row_bottom" — tiles flow left-to-right, rows stack UP from y+h
+--   "col_left"   — tiles flow top-to-bottom, cols stack RIGHT from x
+--   "col_right"  — tiles flow top-to-bottom, cols stack LEFT from x+w
+local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: number, h: number, orientation: string)
+   local discards = state.deal.players[seat].hand.discards
+   if #discards == 0 then return end
 
-   local d = state.deal
-   local max_n = 0
-   for seat = 1, 4 do
-      local k = #d.players[seat].hand.discards
-      if k > max_n then max_n = k end
-   end
-   if max_n == 0 then
-      love.graphics.setColor(0.45, 0.45, 0.50, 1.0)
-      love.graphics.print("(no discards yet)", x + 14, y + 12)
-      return
-   end
+   local color = SEAT_COLORS[seat]
+   local tile_w = 22
+   local tile_h = 28
+   local gap = 2
 
-   -- Round-robin interleave for an approximately-chronological order.
-   local items: {DiscardItem} = {}
-   for i = 1, max_n do
-      for seat = 1, 4 do
-         local list = d.players[seat].hand.discards
-         if i <= #list then
-            items[#items + 1] = { seat = seat, tile = list[i] }
+   if orientation == "row_top" or orientation == "row_bottom" then
+      local cols = math.floor((w + gap) / (tile_w + gap))
+      if cols < 1 then cols = 1 end
+      for i, t in ipairs(discards) do
+         local row_idx = math.floor((i - 1) / cols)
+         local col_idx = (i - 1) % cols
+         local tx = x + col_idx * (tile_w + gap)
+         local ty: number
+         if orientation == "row_top" then
+            ty = y + row_idx * (tile_h + gap)
+         else
+            ty = y + h - tile_h - row_idx * (tile_h + gap)
          end
+         if ty < y or ty + tile_h > y + h then break end
+         tile_render.draw_tile_box(t, tx, ty, tile_w, tile_h,
+            0.94, 0.92, 0.84, color.r, color.g, color.b)
       end
-   end
-
-   -- Pile region: a centered rectangle smaller than the full panel so
-   -- tiles cluster rather than spread to the edges. Scaled to the
-   -- shorter dimension so the pile looks compact and "thrown" rather
-   -- than orderly.
-   local tile_w = 30
-   local tile_h = 38
-   local pile_w = math.min(w - 24, 480)
-   local pile_h = math.min(h - 24, 280)
-   local pile_cx = x + w / 2
-   local pile_cy = y + h / 2
-   local span_x = pile_w / 2 - tile_w / 2
-   local span_y = pile_h / 2 - tile_h / 2
-
-   for i, item in ipairs(items) do
-      -- Hash incorporates the chronological index so identical tile
-      -- copies (the wall has 4 of each kind) land in different spots.
-      local s = item.tile.tile_id as string
-      local h1 = i * 257
-      local h2 = i * 263
-      for j = 1, #s do
-         h1 = (h1 * 31 + s:byte(j)) % 65536
-         h2 = (h2 * 37 + s:byte(j)) % 65536
+   else
+      local rows = math.floor((h + gap) / (tile_h + gap))
+      if rows < 1 then rows = 1 end
+      for i, t in ipairs(discards) do
+         local col_idx = math.floor((i - 1) / rows)
+         local row_idx = (i - 1) % rows
+         local tx: number
+         if orientation == "col_left" then
+            tx = x + col_idx * (tile_w + gap)
+         else
+            tx = x + w - tile_w - col_idx * (tile_w + gap)
+         end
+         local ty = y + row_idx * (tile_h + gap)
+         if tx < x or tx + tile_w > x + w then break end
+         tile_render.draw_tile_box(t, tx, ty, tile_w, tile_h,
+            0.94, 0.92, 0.84, color.r, color.g, color.b)
       end
-      local fx = (h1 / 65535) - 0.5  -- in [-0.5, 0.5]
-      local fy = (h2 / 65535) - 0.5
-      local tx = pile_cx + fx * 2 * span_x - tile_w / 2
-      local ty = pile_cy + fy * 2 * span_y - tile_h / 2
-
-      local color = SEAT_COLORS[item.seat]
-      tile_render.draw_tile_box(item.tile, tx, ty, tile_w, tile_h,
-         0.94, 0.92, 0.84, color.r, color.g, color.b)
    end
 end
 
@@ -1478,19 +1466,46 @@ local function on_draw()
    draw_seat_open_sets_col(2, p2_public_x, side_y, public_short, side_h)
 
    -- Center area inside the side strips. Stacks vertically:
-   --   info strip (top)   →  discard pile (middle)  → boon + known wall
+   --   info strip (top)   →  discard zone (middle)  → boon + known wall
+   -- The discard zone is now four per-seat strips that radiate from
+   -- each player's edge toward the compass medallion drawn on the bg.
+   -- info_h shrinks outside opening_actions phase so the discard zone
+   -- gets the room it needs; the opening UI's buttons need the full 130.
    local center_x = p4_public_x + public_short + 8
    local center_w = p2_public_x - center_x - 8
    local center_y = side_y
    local info_strip_h = 26
-   local info_h = 130
+   local in_opening = (state.deal.phase as string) == "opening_actions"
+   local info_h = in_opening and 130 or 70
    local pile_h = side_h - info_h - info_strip_h * 2 - 8
-   if pile_h < 80 then pile_h = 80 end
+   if pile_h < 100 then pile_h = 100 end
 
    draw_center_info(center_x, center_y, center_w, info_h)
 
    local pile_y = center_y + info_h + 4
-   draw_center_discard_pile(center_x, pile_y, center_w, pile_h)
+
+   -- Discard layout: per-seat strips around a central compass area.
+   -- Strip thickness chosen for ~2 rows of 28-tall tiles. Inner compass
+   -- area is what's left — bg image's medallion shows through there,
+   -- and the action prompt overlay anchors on top of it.
+   local strip_thick_h <const>: number = 60
+   local strip_thick_w <const>: number = 50
+   local p3_disc_y = pile_y
+   local p1_disc_y = pile_y + pile_h - strip_thick_h
+   local middle_y  = pile_y + strip_thick_h
+   local middle_h  = pile_h - 2 * strip_thick_h
+   if middle_h < 0 then middle_h = 0 end
+
+   local p4_disc_x = center_x
+   local p2_disc_x = center_x + center_w - strip_thick_w
+   local compass_x = center_x + strip_thick_w
+   local compass_w = center_w - 2 * strip_thick_w
+   if compass_w < 0 then compass_w = 0 end
+
+   draw_seat_discard_strip(3, compass_x,    p3_disc_y, compass_w,     strip_thick_h, "row_top")
+   draw_seat_discard_strip(1, compass_x,    p1_disc_y, compass_w,     strip_thick_h, "row_bottom")
+   draw_seat_discard_strip(4, p4_disc_x,    middle_y,  strip_thick_w, middle_h,      "col_left")
+   draw_seat_discard_strip(2, p2_disc_x,    middle_y,  strip_thick_w, middle_h,      "col_right")
 
    -- Boon strip + known wall at the bottom of the center column.
    info_panels.draw_boon_strip(state.deal, 1, center_x, pile_y + pile_h + 4, center_w, info_strip_h)
@@ -1504,13 +1519,22 @@ local function on_draw()
       local kind: CachedOptsKind = phase == "reaction_window" and "reaction" or "self"
       local opts = options_cached(d, kind)
       local title = kind == "reaction" and "Reaction — choose an action" or "Your turn"
-      local panel_w = math.min(360, center_w - 16)
+      local panel_w = math.min(360, compass_w - 8)
+      if panel_w < 200 then panel_w = math.min(360, center_w - 16) end
       local panel_h = 36 + #opts * 24 + 8
       local panel_x = center_x + (center_w - panel_w) / 2
-      -- Anchor near the top of the discard pile so the prompt is the
-      -- visual focus when the player has a decision; the pile shows
-      -- behind it. Falls back inside the pile area if it doesn't fit.
-      local panel_y = pile_y + math.max(8, (pile_h - panel_h) / 2)
+      -- Anchor in the compass area (center of the discard ring) so the
+      -- prompt is the visual focus and overlaps the bg medallion rather
+      -- than any of the seat discard strips.
+      local prompt_anchor_y = middle_y
+      local prompt_anchor_h = middle_h
+      if prompt_anchor_h < panel_h then
+         -- Compass area too small for the prompt (rare layouts) — fall
+         -- back to centering across the whole pile area.
+         prompt_anchor_y = pile_y
+         prompt_anchor_h = pile_h
+      end
+      local panel_y = prompt_anchor_y + math.max(0, (prompt_anchor_h - panel_h) / 2)
       local rects = action_prompt.draw(opts, title, panel_x, panel_y, panel_w, panel_h)
       for i, r in ipairs(rects) do
          local opt = opts[i]
