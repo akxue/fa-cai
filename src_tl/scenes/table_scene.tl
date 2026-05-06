@@ -670,7 +670,12 @@ end
 
 local function on_keypressed(key: string)
    if key == "escape" then
-      love.event.quit(0)
+      -- Abandon the deal and return to the title screen. Mirrors the
+      -- "Quit run" button on result_scene — no life is decremented; the
+      -- run is simply discarded. ESC quitting the application from
+      -- mid-deal was the legacy debug-table behavior; it surprised
+      -- players who expected ESC to mean "back/cancel."
+      scene_stack.fire_back_to_start()
       return
    end
    if key == "f1" then
@@ -1306,18 +1311,18 @@ local function draw_hints(x: number, y: number)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
    if (state.deal.phase as string) == "opening_actions" then
       if has_swap_tiles_action() then
-         draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   F1 debug   ESC quit", x, y)
+         draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   F1 debug   ESC menu", x, y)
       else
-         draw_text("Click Confirm to begin play   /   F1 debug   ESC quit", x, y)
+         draw_text("Click Confirm to begin play   /   F1 debug   ESC menu", x, y)
       end
    elseif state.mode == "run" and has_seat1_pending_input(state.deal) then
       if (state.deal.phase as string) == "awaiting_action" and state.deal.current_player == 1 then
-         draw_text("Click a tile to select, click again to discard   /   buttons: Hu / Kong / Discard   /   F1 debug   ESC quit", x, y)
+         draw_text("Click a tile to select, click again to discard   /   buttons: Hu / Kong / Discard   /   F1 debug   ESC menu", x, y)
       else
-         draw_text("Click an action button   /   keys: H P K C X   /   F1 debug   ESC quit", x, y)
+         draw_text("Click an action button   /   keys: H P K C X   /   F1 debug   ESC menu", x, y)
       end
    else
-      draw_text("F1 debug overlay   /   T step  S advance  R restart   /   ESC quit", x, y)
+      draw_text("F1 debug overlay   /   T step  S advance  R restart   /   ESC menu", x, y)
    end
 end
 
