@@ -1741,7 +1741,7 @@ The candidate-pipeline shape is now in place. Future slices can layer:
 
 ### S08: Playable Round 1 UI
 
-Status: `complete (6 commits)`
+Status: `complete (21 commits — 6 core, 6 manual-smoke polish, 1 user-found bug, 8 staff-review feedback)`
 
 Goal: turn the debug-playable deal into a human-playable Round 1 flow.
 
@@ -1844,7 +1844,7 @@ Verification:
 
 ### S09: Milestone 1 Integration And Playtest Pass
 
-Status: `pending`
+Status: `in progress`
 
 Goal: stabilize the one-round vertical slice for internal playtesting.
 
