@@ -35,7 +35,7 @@ global record love
       setFont:              function(font: Font)
       getFont:              function(): Font
       newImage:             function(path: string): Image
-      draw:                 function(image: Image, x: number, y: number, r: number, sx: number, sy: number)
+      draw:                 function(image: Image, x: number, y: number, r: number, sx: number, sy: number, ox: number, oy: number)
    end
 
    record window

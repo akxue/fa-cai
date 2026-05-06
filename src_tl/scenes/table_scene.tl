@@ -29,6 +29,7 @@ local button        = require("ui.button")
 local scoring       = require("game.scoring")
 local scene_stack   = require("app.scene_stack")
 local assets        = require("app.assets")
+local ai_personas   = require("content.ai_personas")
 
 -- ── Tunables ──────────────────────────────────────────────────────────────
 
@@ -782,6 +783,12 @@ end
 
 local SEAT_NAMES: {string} = { "East (P1)", "South (P2)", "West (P3)", "North (P4)" }
 
+-- Per-seat tile orientation. Player seat is "south" (no rotation, thickness
+-- band on bottom). The other three sit at the table edges, which is what
+-- gives the table its perspective — a tile seen from the north opponent's
+-- seat has its "back" thickness on the top edge from the player's POV.
+local SEAT_ORIENT: {string} = { "south", "east", "north", "west" }
+
 -- Per-seat discard color (used to tint each tile's border in the center
 -- discard pile so players can see at a glance who threw what).
 local record SeatColor
@@ -879,6 +886,10 @@ local function title_with_marker(seat_index: integer): string
    local d = state.deal
    local is_current = (d.current_player == seat_index) and (d.phase as string) ~= "deal_over"
    local title = SEAT_NAMES[seat_index]
+   local persona = ai_personas.for_seat(seat_index)
+   if persona ~= nil and persona.archetype ~= "" then
+      title = title .. " · " .. persona.archetype
+   end
    if is_current then title = "▶ " .. title end
    return title
 end
@@ -897,7 +908,7 @@ local function draw_opponent_hand_row(seat_index: integer, x: number, y: number,
    local pad = 8
    local gap = 2
    local avail = w - 2 * pad
-   local tile_w = math.min(28, (avail - gap * (n - 1)) / n)
+   local tile_w = math.min(38, (avail - gap * (n - 1)) / n)
    if tile_w < 12 then tile_w = 12 end
    local tile_h = h - 22
    if tile_h > tile_w * 1.5 then tile_h = math.floor(tile_w * 1.5) end
@@ -905,17 +916,24 @@ local function draw_opponent_hand_row(seat_index: integer, x: number, y: number,
    local start_x = x + pad + math.max(0, (avail - row_w) / 2)
    local row_y = y + 18
 
+   local orientation = SEAT_ORIENT[seat_index]
    if state.inspector_open then
       local idxs = sorted_indices(p.hand.concealed_tiles)
       for slot, src in ipairs(idxs) do
          local t = p.hand.concealed_tiles[src]
          local tx = start_x + (slot - 1) * (tile_w + gap)
-         tile_render.draw_tile_box(t, tx, row_y, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
+         tile_render.draw_tile(t, tx, row_y, tile_w, tile_h, {
+            orientation = orientation, face_down = false,
+            accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
+         })
       end
    else
       for i = 1, n do
          local tx = start_x + (i - 1) * (tile_w + gap)
-         tile_render.draw_facedown_box(tx, row_y, tile_w, tile_h)
+         tile_render.draw_tile(nil, tx, row_y, tile_w, tile_h, {
+            orientation = orientation, face_down = true,
+            accent_r = 0.30, accent_g = 0.32, accent_b = 0.40,
+         })
       end
    end
 end
@@ -929,23 +947,30 @@ local function draw_opponent_hand_col(seat_index: integer, x: number, y: number,
    local pad = 8
    local gap = 2
    local avail = h - 22 - pad
-   local tile_h = math.min(20, (avail - gap * (n - 1)) / n)
+   local tile_h = math.min(28, (avail - gap * (n - 1)) / n)
    if tile_h < 10 then tile_h = 10 end
    local tile_w = w - 14
    local col_h = tile_h * n + gap * (n - 1)
    local start_y = y + 22 + math.max(0, (avail - col_h) / 2)
 
+   local orientation = SEAT_ORIENT[seat_index]
    if state.inspector_open then
       local idxs = sorted_indices(p.hand.concealed_tiles)
       for slot, src in ipairs(idxs) do
          local t = p.hand.concealed_tiles[src]
          local ty = start_y + (slot - 1) * (tile_h + gap)
-         tile_render.draw_tile_box(t, x + 7, ty, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
+         tile_render.draw_tile(t, x + 7, ty, tile_w, tile_h, {
+            orientation = orientation, face_down = false,
+            accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
+         })
       end
    else
       for i = 1, n do
          local ty = start_y + (i - 1) * (tile_h + gap)
-         tile_render.draw_facedown_box(x + 7, ty, tile_w, tile_h)
+         tile_render.draw_tile(nil, x + 7, ty, tile_w, tile_h, {
+            orientation = orientation, face_down = true,
+            accent_r = 0.30, accent_g = 0.32, accent_b = 0.40,
+         })
       end
    end
 end
@@ -958,16 +983,20 @@ local function draw_seat_open_sets_row(seat_index: integer, x: number, y: number
    draw_panel_alpha(x, y, w, h, "", HAND_PANEL_ALPHA)
    local p = state.deal.players[seat_index]
    if #p.hand.sets == 0 then return end
+   local orientation = SEAT_ORIENT[seat_index]
    local pad = 8
    local gap = 2
    local set_gap = 10
-   local tile_w = 22
+   local tile_w = 26
    local tile_h = h - 14
    local cx = x + pad
    local row_y = y + 8
    for _, s in ipairs(p.hand.sets) do
       for _, t in ipairs(s.tiles) do
-         tile_render.draw_tile_box(t, cx, row_y, tile_w, tile_h, 0.86, 0.92, 0.86, 0.40, 0.55, 0.45)
+         tile_render.draw_tile(t, cx, row_y, tile_w, tile_h, {
+            orientation = orientation, face_down = false,
+            accent_r = 0.40, accent_g = 0.55, accent_b = 0.45,
+         })
          cx = cx + tile_w + gap
       end
       cx = cx + set_gap
@@ -978,17 +1007,21 @@ local function draw_seat_open_sets_col(seat_index: integer, x: number, y: number
    draw_panel_alpha(x, y, w, h, "", HAND_PANEL_ALPHA)
    local p = state.deal.players[seat_index]
    if #p.hand.sets == 0 then return end
+   local orientation = SEAT_ORIENT[seat_index]
    local pad = 8
    local gap = 2
    local set_gap = 8
    local tile_w = w - 14
-   local tile_h = 22
+   local tile_h = 26
    local cx = x + 7
    local cy = y + 8
    for _, s in ipairs(p.hand.sets) do
       for _, t in ipairs(s.tiles) do
          if cy + tile_h > y + h - pad then return end
-         tile_render.draw_tile_box(t, cx, cy, tile_w, tile_h, 0.86, 0.92, 0.86, 0.40, 0.55, 0.45)
+         tile_render.draw_tile(t, cx, cy, tile_w, tile_h, {
+            orientation = orientation, face_down = false,
+            accent_r = 0.40, accent_g = 0.55, accent_b = 0.45,
+         })
          cy = cy + tile_h + gap
       end
       cy = cy + set_gap
@@ -1011,11 +1044,15 @@ local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: n
    if #discards == 0 then return end
 
    local color = SEAT_COLORS[seat]
-   local tile_w = 22
-   local tile_h = 28
+   local seat_orient = SEAT_ORIENT[seat]
+   local is_row = orientation == "row_top" or orientation == "row_bottom"
+   -- Discards radiate from each seat's edge, so the per-tile rect is
+   -- "tall" for row-discards (P1/P3) and "wide" for col-discards (P2/P4).
+   local tile_w = is_row and 26 or 34
+   local tile_h = is_row and 34 or 26
    local gap = 2
 
-   if orientation == "row_top" or orientation == "row_bottom" then
+   if is_row then
       local cols = math.floor((w + gap) / (tile_w + gap))
       if cols < 1 then cols = 1 end
       for i, t in ipairs(discards) do
@@ -1029,8 +1066,10 @@ local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: n
             ty = y + h - tile_h - row_idx * (tile_h + gap)
          end
          if ty < y or ty + tile_h > y + h then break end
-         tile_render.draw_tile_box(t, tx, ty, tile_w, tile_h,
-            0.94, 0.92, 0.84, color.r, color.g, color.b)
+         tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
+            orientation = seat_orient, face_down = false,
+            accent_r = color.r, accent_g = color.g, accent_b = color.b,
+         })
       end
    else
       local rows = math.floor((h + gap) / (tile_h + gap))
@@ -1046,8 +1085,10 @@ local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: n
          end
          local ty = y + row_idx * (tile_h + gap)
          if tx < x or tx + tile_w > x + w then break end
-         tile_render.draw_tile_box(t, tx, ty, tile_w, tile_h,
-            0.94, 0.92, 0.84, color.r, color.g, color.b)
+         tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
+            orientation = seat_orient, face_down = false,
+            accent_r = color.r, accent_g = color.g, accent_b = color.b,
+         })
       end
    end
 end
@@ -1072,9 +1113,9 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
    local avail_w = w - pad_x * 2
    local avail_h = h - pad_y - 8
    local tile_w_calc = (avail_w - gap * (n - 1)) / n
-   local tile_w = math.min(48, tile_w_calc)
+   local tile_w = math.min(56, tile_w_calc)
    if tile_w < 16 then tile_w = 16 end
-   local tile_h = math.min(56, avail_h)
+   local tile_h = math.min(76, avail_h)
    if tile_h < 24 then tile_h = 24 end
 
    local row_w = tile_w * n + gap * (n - 1)
@@ -1110,7 +1151,11 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
          fr, fg, fb = 1.00, 0.97, 0.78
          br, bg, bb = 1.00, 0.55, 0.20
       end
-      tile_render.draw_tile_box(t, tx, row_y, tile_w, tile_h, fr, fg, fb, br, bg, bb)
+      tile_render.draw_tile(t, tx, row_y, tile_w, tile_h, {
+         orientation = "south", face_down = false,
+         accent_r = br, accent_g = bg, accent_b = bb,
+         face_r = fr, face_g = fg, face_b = fb,
+      })
 
       if can_click_discard then
          -- Two-click confirm: a click on a non-selected tile sets it as
@@ -1149,6 +1194,35 @@ local function draw_status_bar(x: number, y: number, w: number)
    draw_panel(x, y, w, 24, "")
    love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
    draw_text(s, x + 8, y + 4)
+end
+
+-- Corner HUD: stacked pills in the top-left with run progress. Replaces
+-- the wide debug status bar in run mode so the player sees Round / Lives
+-- / Wall at a glance and the felt isn't crowded with seed/ticks debug
+-- text. Each pill has a coloured accent stripe on the left for quick
+-- recognition (orange = round, red = life, green = wall).
+local PILL_W <const>: integer = 100
+local PILL_H <const>: integer = 24
+local PILL_GAP <const>: integer = 4
+
+local function draw_pill(x: number, y: number, text: string, accent_r: number, accent_g: number, accent_b: number)
+   draw_panel(x, y, PILL_W, PILL_H, "")
+   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
+   love.graphics.rectangle("fill", x, y, 4, PILL_H)
+   love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
+   love.graphics.print(text, x + 12, y + 5)
+end
+
+local function draw_corner_hud(x: number, y: number)
+   local rs = state.run_state
+   local d = state.deal
+   local round_text = (rs ~= nil) and ("Round " .. tostring(rs.round_index)) or "Round —"
+   local lives_text = (rs ~= nil) and string.format("%d Life", rs.lives) or "— Life"
+   local wall_text  = "Wall " .. tostring(wall_mod.remaining(d.wall))
+
+   draw_pill(x, y,                              round_text, 1.00, 0.55, 0.20)
+   draw_pill(x, y + (PILL_H + PILL_GAP),        lives_text, 0.95, 0.30, 0.30)
+   draw_pill(x, y + (PILL_H + PILL_GAP) * 2,    wall_text,  0.55, 0.85, 0.55)
 end
 
 -- Center info panel. Shows current turn / phase / wall on the first
@@ -1404,7 +1478,14 @@ local function on_draw()
    local right_w = show_debug_panel and 360 or 0
    local right_x = sw - right_w - margin
 
-   draw_status_bar(margin, margin, sw - 2 * margin)
+   -- Corner HUD (run mode) or full-width debug status bar (debug mode).
+   -- The HUD stacks Round/Lives/Wall pills in the top-left; the debug
+   -- bar shows seed/phase/ticks across the top.
+   if state.mode == "debug" then
+      draw_status_bar(margin, margin, sw - 2 * margin)
+   else
+      draw_corner_hud(margin, margin)
+   end
 
    -- Hand strips and discard pile sit inside the green-felt area of the
    -- background image. The status bar (top) and hints (bottom) stay in
@@ -1420,10 +1501,10 @@ local function on_draw()
    end
 
    -- Edge thicknesses
-   local edge_short  = 56  -- opponent hand strip
-   local public_short = 48  -- discards + open-sets strip
-   local p1_hand_h   = 96  -- player hand strip (face-up)
-   local p1_public_h = 56
+   local edge_short  = 72  -- opponent hand strip (bigger tiles + thickness band)
+   local public_short = 52  -- discards + open-sets strip
+   local p1_hand_h   = 116 -- player hand strip (face-up, ~80px tiles + title)
+   local p1_public_h = 60
 
    -- P3 (top): hand row, then open-sets row below it.
    local p3_hand_y   = table_y
