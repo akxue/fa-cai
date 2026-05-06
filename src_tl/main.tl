@@ -47,7 +47,7 @@ local function on_retry(rs: RunState)
 end
 
 local function on_back_to_start()
-   scene_stack.replace(start_scene as Scene)
+   scene_stack.reset_to(start_scene as Scene)
 end
 
 function love.load()

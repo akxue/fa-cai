@@ -43,15 +43,18 @@ function M.set_back_to_start_handler(fn: function())
 end
 
 function M.fire_deal_over(d: DealState, rs: RunState)
-   if deal_over_handler ~= nil then deal_over_handler(d, rs) end
+   assert(deal_over_handler ~= nil, "scene_stack.fire_deal_over: no handler installed (call set_deal_over_handler in love.load)")
+   deal_over_handler(d, rs)
 end
 
 function M.fire_retry(rs: RunState)
-   if retry_handler ~= nil then retry_handler(rs) end
+   assert(retry_handler ~= nil, "scene_stack.fire_retry: no handler installed")
+   retry_handler(rs)
 end
 
 function M.fire_back_to_start()
-   if back_to_start_handler ~= nil then back_to_start_handler() end
+   assert(back_to_start_handler ~= nil, "scene_stack.fire_back_to_start: no handler installed")
+   back_to_start_handler()
 end
 
 function M.push(s: Scene)
@@ -69,6 +72,15 @@ end
 function M.replace(s: Scene)
    if #stack > 0 then stack[#stack] = nil end
    stack[#stack + 1] = s
+   s.load()
+end
+
+-- Drops the entire stack and pushes `s` as the only scene. Use for
+-- "back to start" transitions that need a guaranteed depth-1 stack —
+-- replace() only rewrites the top, so repeated round-trips to start
+-- would otherwise accumulate scenes underneath.
+function M.reset_to(s: Scene)
+   stack = { s }
    s.load()
 end
 
