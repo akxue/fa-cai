@@ -50,11 +50,6 @@ local record LogEntry
    kind: string   -- "ev" | "ai" | "err" | "sys"
 end
 
-local record DiscardItem
-   seat: integer
-   tile: Tile
-end
-
 local enum CachedOptsKind
    ""
    "reaction"
@@ -1500,35 +1495,37 @@ local function on_draw()
    draw_seat_discard_strip(4, p4_disc_x,    middle_y,  strip_thick_w, middle_h,      "col_left")
    draw_seat_discard_strip(2, p2_disc_x,    middle_y,  strip_thick_w, middle_h,      "col_right")
 
-   -- Boon strip + known wall at the bottom of the center column.
-   info_panels.draw_boon_strip(state.deal, 1, center_x, pile_y + pile_h + 4, center_w, info_strip_h)
-   info_panels.draw_known_wall(state.deal, 1, center_x, pile_y + pile_h + 4 + info_strip_h, center_w, info_strip_h)
+   -- Outer bottom strip — between the felt's bottom edge and the hint
+   -- line. Hosts boons (left), action buttons (center), known wall
+   -- (right). Was previously rendered inside the table's center area;
+   -- moved out so the felt stays clean and the action UI is closer to
+   -- the player's hand.
+   local bar_y = table_y + table_h + 8
+   local bar_bottom = sh - hint_h - margin
+   local bar_h = bar_bottom - bar_y
+   if bar_h < 60 then bar_h = 60 end
 
-   -- Action prompt overlay — drawn inside the center area when seat 1
-   -- has a decision. Each option becomes a Clickable.
+   local boon_w = 360
+   local cand_w = 280
+   local boon_x = margin
+   local cand_x = sw - margin - cand_w
+   info_panels.draw_boon_strip(state.deal, 1, boon_x, bar_y, boon_w, info_strip_h)
+   info_panels.draw_known_wall(state.deal, 1, cand_x, bar_y, cand_w, info_strip_h)
+
+   -- Action prompt fills the gap between boons and known-wall, drawn as
+   -- a horizontal button row (existing vertical-list layout overflows
+   -- the bar height when there are 4-5 options).
    if has_seat1_pending_input(state.deal) then
       local d = state.deal
       local phase = d.phase as string
       local kind: CachedOptsKind = phase == "reaction_window" and "reaction" or "self"
       local opts = options_cached(d, kind)
-      local title = kind == "reaction" and "Reaction — choose an action" or "Your turn"
-      local panel_w = math.min(360, compass_w - 8)
-      if panel_w < 200 then panel_w = math.min(360, center_w - 16) end
-      local panel_h = 36 + #opts * 24 + 8
-      local panel_x = center_x + (center_w - panel_w) / 2
-      -- Anchor in the compass area (center of the discard ring) so the
-      -- prompt is the visual focus and overlaps the bg medallion rather
-      -- than any of the seat discard strips.
-      local prompt_anchor_y = middle_y
-      local prompt_anchor_h = middle_h
-      if prompt_anchor_h < panel_h then
-         -- Compass area too small for the prompt (rare layouts) — fall
-         -- back to centering across the whole pile area.
-         prompt_anchor_y = pile_y
-         prompt_anchor_h = pile_h
-      end
-      local panel_y = prompt_anchor_y + math.max(0, (prompt_anchor_h - panel_h) / 2)
-      local rects = action_prompt.draw(opts, title, panel_x, panel_y, panel_w, panel_h)
+      local action_x = boon_x + boon_w + 12
+      local action_w = cand_x - action_x - 12
+      local action_y = bar_y + info_strip_h + 4
+      local action_h = bar_h - info_strip_h - 4
+      if action_h < 36 then action_h = 36 end
+      local rects = action_prompt.draw_horizontal(opts, action_x, action_y, action_w, action_h)
       for i, r in ipairs(rects) do
          local opt = opts[i]
          state.clickables[#state.clickables + 1] = {
