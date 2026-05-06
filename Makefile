@@ -37,7 +37,7 @@ test: build
 	$(BUSTED) --lpath "$(LUA_COMPAT)/?.lua;$(SRC_OUT)/?.lua;$(SRC_OUT)/?/init.lua;$(SPEC_OUT)/?.lua;$(SPEC_OUT)/?/init.lua" $(SPEC_OUT)/
 
 run: build
-	$(LOVE) $(SRC_OUT)/
+	$(LOVE) .
 
 # Headless AI playtest harness. Runs scripts/playtest.lua against the built
 # Lua tree and reports per-seed outcomes plus aggregate metrics. The S06

@@ -28,6 +28,7 @@ local panel         = require("ui.panel")
 local button        = require("ui.button")
 local scoring       = require("game.scoring")
 local scene_stack   = require("app.scene_stack")
+local assets        = require("app.assets")
 
 -- ── Tunables ──────────────────────────────────────────────────────────────
 
@@ -1361,10 +1362,44 @@ local function dispatch_option(opt: ActionPromptOption)
    apply_player_action(opt.action, opt.label)
 end
 
+-- Green-felt area of the bg_table image, in image-pixel coordinates.
+-- Tuned by eye against assets/backgrounds/garden_table_concept_match_v1.png
+-- (1672 x 941). Used to inset the hand strips so they sit on the table
+-- rather than spanning the full window.
+local FELT_LEFT_PX   <const>: number = 280
+local FELT_RIGHT_PX  <const>: number = 1380
+local FELT_TOP_PX    <const>: number = 95
+local FELT_BOTTOM_PX <const>: number = 700
+local BG_IMG_W       <const>: number = 1672
+local BG_IMG_H       <const>: number = 941
+
+local function felt_area_in_window(sw: number, sh: number): number, number, number, number
+   local scale = math.max(sw / BG_IMG_W, sh / BG_IMG_H)
+   local off_x = (sw - BG_IMG_W * scale) / 2
+   local off_y = (sh - BG_IMG_H * scale) / 2
+   local x = off_x + FELT_LEFT_PX * scale
+   local y = off_y + FELT_TOP_PX  * scale
+   local w = (FELT_RIGHT_PX  - FELT_LEFT_PX) * scale
+   local h = (FELT_BOTTOM_PX - FELT_TOP_PX)  * scale
+   return x, y, w, h
+end
+
 local function on_draw()
-   love.graphics.setBackgroundColor(0.10, 0.10, 0.12, 1.0)
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
+
+   -- Background image as cover-fit. setBackgroundColor handles whatever
+   -- the cover-fit doesn't reach (rare with a 1672x941 source) so the
+   -- window never paints fuchsia at the edges.
+   love.graphics.setBackgroundColor(0.13, 0.16, 0.18, 1.0)
+   local bg = assets.bg_table()
+   if bg ~= nil then
+      local scale = math.max(sw / BG_IMG_W, sh / BG_IMG_H)
+      local off_x = (sw - BG_IMG_W * scale) / 2
+      local off_y = (sh - BG_IMG_H * scale) / 2
+      love.graphics.setColor(1, 1, 1, 1)
+      love.graphics.draw(bg, off_x, off_y, 0, scale, scale)
+   end
 
    -- Keep the cursor pointing at a real tile; this also runs in update
    -- and keypressed but we re-check here so click-only flows have a
@@ -1376,7 +1411,6 @@ local function on_draw()
 
    local margin = 8
    local hint_h = 20
-   local status_h = 24
 
    -- Right side panel (log + inspector) is hidden in run mode unless F1
    -- toggles it, and always shown in debug mode.
@@ -1386,10 +1420,18 @@ local function on_draw()
 
    draw_status_bar(margin, margin, sw - 2 * margin)
 
-   local table_x = margin
-   local table_y = margin + status_h + margin
-   local table_w = sw - 2 * margin - (right_w > 0 and right_w + margin or 0)
-   local table_h = sh - table_y - hint_h - margin
+   -- Hand strips and discard pile sit inside the green-felt area of the
+   -- background image. The status bar (top) and hints (bottom) stay in
+   -- the window margins outside the felt.
+   local table_x, table_y, table_w, table_h = felt_area_in_window(sw, sh)
+   if right_w > 0 then
+      -- Debug panel takes its slice from the right; shrink table_w so
+      -- the panel doesn't overlap the side hand col.
+      local right_edge = right_x
+      if table_x + table_w > right_edge - margin then
+         table_w = right_edge - margin - table_x
+      end
+   end
 
    -- Edge thicknesses
    local edge_short  = 56  -- opponent hand strip
