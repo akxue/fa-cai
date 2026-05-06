@@ -1535,9 +1535,11 @@ local function on_draw()
    draw_seat_open_sets_col(2, p2_public_x, side_y, public_short, side_h)
 
    -- Center area inside the side strips. Stacks vertically:
-   --   info strip (top)   →  discard zone (middle)  → boon + known wall
-   -- The discard zone is now four per-seat strips that radiate from
-   -- each player's edge toward the compass medallion drawn on the bg.
+   --   info strip (top)   →  discard zone (middle)
+   -- The discard zone is four per-seat strips that radiate from each
+   -- player's edge toward the compass medallion drawn on the bg. The
+   -- bottom-bar boons + known wall live outside the felt now (s10), so
+   -- pile_h reclaims the vertical they used to occupy in here.
    -- info_h shrinks outside opening_actions phase so the discard zone
    -- gets the room it needs; the opening UI's buttons need the full 130.
    local center_x = p4_public_x + public_short + 8
@@ -1546,7 +1548,7 @@ local function on_draw()
    local info_strip_h = 26
    local in_opening = (state.deal.phase as string) == "opening_actions"
    local info_h = in_opening and 130 or 70
-   local pile_h = side_h - info_h - info_strip_h * 2 - 8
+   local pile_h = side_h - info_h - 8
    if pile_h < 100 then pile_h = 100 end
 
    draw_center_info(center_x, center_y, center_w, info_h)
@@ -1554,11 +1556,13 @@ local function on_draw()
    local pile_y = center_y + info_h + 4
 
    -- Discard layout: per-seat strips around a central compass area.
-   -- Strip thickness chosen for ~2 rows of 28-tall tiles. Inner compass
-   -- area is what's left — bg image's medallion shows through there,
-   -- and the action prompt overlay anchors on top of it.
-   local strip_thick_h <const>: number = 60
-   local strip_thick_w <const>: number = 50
+   -- The horizontal strips (P1 / P3) are kept intentionally short; in a
+   -- typical deal each seat discards 13-20 tiles, which fits one row
+   -- given compass_w. Squeezing strip_thick_h gives the vertical strips
+   -- (P2 / P4) more room — the side seats' tiles read at a comfortable
+   -- size and the cols stop wrapping into a second column early.
+   local strip_thick_h <const>: number = 42
+   local strip_thick_w <const>: number = 54
    local p3_disc_y = pile_y
    local p1_disc_y = pile_y + pile_h - strip_thick_h
    local middle_y  = pile_y + strip_thick_h
