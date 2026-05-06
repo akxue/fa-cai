@@ -8,4 +8,7 @@
 -- alongside src/ at the repo root, not inside the generated tree.
 
 package.path = "src/?.lua;src/?/init.lua;lua_compat/?.lua;" .. package.path
-require("main")
+-- dofile (not require) to avoid the circular module-name conflict: LÖVE
+-- already cached this file as `package.loaded.main` when it required us
+-- to boot, so a second require("main") here resolves to ourselves.
+dofile("src/main.lua")
