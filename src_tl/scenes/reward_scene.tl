@@ -18,29 +18,25 @@ local record RewardState
    clickables:   {Clickable}
 end
 
-local pending: RewardState = nil
-local has_pending: boolean = false
+-- Caller sets state via M.start before scene_stack pushes the scene;
+-- M.load only handles LÖVE state setup and a defensive empty-state
+-- fallback for the "scene shown without start" case.
 local state: RewardState = nil
 
 local M = {}
 
 function M.start(score_result: ScoreResult, has_score: boolean, won_by_zi_mo: boolean)
-   pending = {
+   state = {
       score_result = score_result,
       has_score    = has_score,
       won_by_zi_mo = won_by_zi_mo,
       clickables   = {},
    }
-   has_pending = true
 end
 
 function M.load()
    love.graphics.setBackgroundColor(0.10, 0.12, 0.10, 1.0)
-   if has_pending then
-      state = pending
-      pending = nil
-      has_pending = false
-   else
+   if state == nil then
       state = { score_result = {} as ScoreResult, has_score = false, won_by_zi_mo = false, clickables = {} }
    end
 end

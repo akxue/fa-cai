@@ -20,8 +20,9 @@ local record ResultState
    clickables:    {Clickable}
 end
 
-local pending: ResultState = nil
-local has_pending: boolean = false
+-- Caller sets state via M.start before scene_stack pushes the scene;
+-- M.load only handles LÖVE state setup and a defensive empty-state
+-- fallback for the "scene shown without start" case.
 local state: ResultState = nil
 
 local M = {}
@@ -29,17 +30,12 @@ local M = {}
 -- Caller should already have decremented run_state.lives. The scene only
 -- displays the post-decrement state and routes the retry/end flow.
 function M.start(rs: RunState, outcome_label: string)
-   pending = { run_state = rs, outcome_label = outcome_label, clickables = {} }
-   has_pending = true
+   state = { run_state = rs, outcome_label = outcome_label, clickables = {} }
 end
 
 function M.load()
    love.graphics.setBackgroundColor(0.12, 0.10, 0.10, 1.0)
-   if has_pending then
-      state = pending
-      pending = nil
-      has_pending = false
-   else
+   if state == nil then
       state = { run_state = nil, outcome_label = "", clickables = {} }
    end
 end
