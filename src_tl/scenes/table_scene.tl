@@ -65,6 +65,7 @@ local record SceneState
    wait_for_step:    boolean
    ai_pace_left:     number
    inspector_open:   boolean
+   discards_modal_open: boolean   -- D toggles the all-discards overlay
    log:              {LogEntry}
    conservation_ok:  boolean
    conservation_msg: string
@@ -151,6 +152,7 @@ local function reset(seed: integer)
       wait_for_step    = false,
       ai_pace_left     = AI_PACE_AUTO,
       inspector_open   = false,
+      discards_modal_open = false,
       log              = {},
       conservation_ok  = true,
       conservation_msg = "OK",
@@ -692,11 +694,23 @@ end
 local function on_mousepressed(x: number, y: number, mouse_button: integer)
    if mouse_button ~= 1 then return end
    if state.deal == nil then return end
+   if state.discards_modal_open then
+      -- Click anywhere to dismiss the modal. Underlying scene clickables
+      -- are blocked while it's up.
+      state.discards_modal_open = false
+      return
+   end
    local hit = clickable_mod.find(state.clickables, x, y)
    if hit ~= nil then hit.callback() end
 end
 
 local function on_keypressed(key: string)
+   -- ESC closes the discards modal first if it's open; otherwise it
+   -- abandons the deal. This is the standard "back" hierarchy.
+   if state.discards_modal_open and (key == "escape" or key == "d") then
+      state.discards_modal_open = false
+      return
+   end
    if key == "escape" then
       -- Abandon the deal and return to the title screen. Mirrors the
       -- "Quit run" button on result_scene — no life is decremented; the
@@ -704,6 +718,10 @@ local function on_keypressed(key: string)
       -- mid-deal was the legacy debug-table behavior; it surprised
       -- players who expected ESC to mean "back/cancel."
       scene_stack.fire_back_to_start()
+      return
+   end
+   if key == "d" then
+      state.discards_modal_open = true
       return
    end
    if key == "f1" then
@@ -1039,6 +1057,12 @@ end
 --   "row_bottom" — tiles flow left-to-right, rows stack UP from y+h
 --   "col_left"   — tiles flow top-to-bottom, cols stack RIGHT from x
 --   "col_right"  — tiles flow top-to-bottom, cols stack LEFT from x+w
+-- Per-seat discard strip. Tiles are sized to read at glance — about
+-- 75% of the player hand size — so the player can scan recent
+-- discards without leaning in. Capacity is bounded; when total
+-- discards exceed what fits, the strip shows the LATEST N tiles and
+-- a "+N" hint where the older ones got clipped. The full pile is
+-- viewable via the discards modal (D key).
 local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: number, h: number, orientation: string)
    local discards = state.deal.players[seat].hand.discards
    if #discards == 0 then return end
@@ -1046,45 +1070,131 @@ local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: n
    local color = SEAT_COLORS[seat]
    local seat_orient = SEAT_ORIENT[seat]
    local is_row = orientation == "row_top" or orientation == "row_bottom"
-   -- Discards radiate from each seat's edge, so the per-tile rect is
-   -- "tall" for row-discards (P1/P3) and "wide" for col-discards (P2/P4).
-   local tile_w = is_row and 26 or 34
-   local tile_h = is_row and 34 or 26
+   -- Tiles roughly 75% of player hand (56x76). Rows = portrait, cols = landscape.
+   local tile_w = is_row and 40 or 52
+   local tile_h = is_row and 52 or 40
    local gap = 2
 
+   local capacity: integer
    if is_row then
-      local cols = math.floor((w + gap) / (tile_w + gap))
+      capacity = math.floor((w + gap) / (tile_w + gap))
+   else
+      capacity = math.floor((h + gap) / (tile_h + gap))
+   end
+   if capacity < 1 then capacity = 1 end
+
+   -- Show only the most recent `capacity` discards. The older ones get
+   -- clipped; their count is reported via the "+N" overlay below.
+   local n = #discards
+   local start_idx = math.max(1, n - capacity + 1)
+   local hidden = start_idx - 1
+
+   for i = 0, n - start_idx do
+      local t = discards[start_idx + i]
+      local tx, ty: number, number
+      if orientation == "row_top" then
+         tx = x + i * (tile_w + gap)
+         ty = y
+      elseif orientation == "row_bottom" then
+         tx = x + i * (tile_w + gap)
+         ty = y + h - tile_h
+      elseif orientation == "col_left" then
+         tx = x
+         ty = y + i * (tile_h + gap)
+      else  -- col_right
+         tx = x + w - tile_w
+         ty = y + i * (tile_h + gap)
+      end
+      tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
+         orientation = seat_orient, face_down = false,
+         accent_r = color.r, accent_g = color.g, accent_b = color.b,
+      })
+   end
+
+   if hidden > 0 then
+      local label = "+" .. tostring(hidden)
+      love.graphics.setColor(0.0, 0.0, 0.0, 0.55)
+      local font = love.graphics.getFont()
+      local lw = font:getWidth(label)
+      local lh = font:getHeight()
+      -- Anchor the badge at the "newer" outside corner so it doesn't
+      -- collide with the seat-orientation cue or the compass medallion.
+      local bx, by: number, number
+      if is_row then
+         bx = x + w - lw - 6
+         by = y + (h - lh) / 2
+      else
+         bx = x + (w - lw) / 2
+         by = y + h - lh - 4
+      end
+      love.graphics.rectangle("fill", bx - 4, by - 2, lw + 8, lh + 4)
+      love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
+      love.graphics.print(label, bx, by)
+   end
+end
+
+-- All-discards modal. Triggered by the D key (and dismissed by ESC, D,
+-- or any click). Renders full discard piles for all four seats so the
+-- player can see history even when the inline strips have clipped to
+-- the most recent N. Tiles here are smaller than the inline strip
+-- (32x42) so a 20+ tile pile fits without wrapping into too many rows.
+local function draw_discards_modal()
+   local sw = love.graphics.getWidth()
+   local sh = love.graphics.getHeight()
+   -- Dim the table behind the modal.
+   love.graphics.setColor(0.0, 0.0, 0.0, 0.65)
+   love.graphics.rectangle("fill", 0, 0, sw, sh)
+
+   local margin = 32
+   local panel_x = margin
+   local panel_y = margin
+   local panel_w = sw - 2 * margin
+   local panel_h = sh - 2 * margin
+   draw_panel(panel_x, panel_y, panel_w, panel_h, "All Discards")
+
+   local title_y = panel_y + 4
+   love.graphics.setColor(0.65, 0.65, 0.72, 1.0)
+   love.graphics.print("ESC / D / click to close", panel_x + panel_w - 200, title_y)
+
+   -- Four equal-width rows stacked vertically: P1 (you) on top, then
+   -- P2/P3/P4. Each row gets a header with persona + count then a
+   -- single-line wrapped tile strip.
+   local content_y = panel_y + 28
+   local content_h = panel_h - 36
+   local row_h = math.floor(content_h / 4)
+   local tile_w <const>: integer = 32
+   local tile_h <const>: integer = 42
+   local gap <const>: integer = 2
+
+   local SEAT_ORDER: {integer} = { 1, 2, 3, 4 }
+   for slot, seat in ipairs(SEAT_ORDER) do
+      local row_y = content_y + (slot - 1) * row_h
+      local p = state.deal.players[seat]
+      local persona = ai_personas.for_seat(seat)
+      local title = SEAT_NAMES[seat]
+      if persona ~= nil and persona.archetype ~= "" then
+         title = title .. " · " .. persona.archetype
+      end
+      local count_label = "  (" .. tostring(#p.hand.discards) .. ")"
+      local color = SEAT_COLORS[seat]
+      love.graphics.setColor(color.r, color.g, color.b, 1.0)
+      love.graphics.print(title, panel_x + 16, row_y + 4)
+      love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
+      love.graphics.print(count_label, panel_x + 16 + 240, row_y + 4)
+
+      local tiles_y = row_y + 22
+      local tiles_x = panel_x + 16
+      local tiles_w = panel_w - 32
+      local cols = math.floor((tiles_w + gap) / (tile_w + gap))
       if cols < 1 then cols = 1 end
-      for i, t in ipairs(discards) do
+
+      local seat_orient = SEAT_ORIENT[seat]
+      for i, t in ipairs(p.hand.discards) do
          local row_idx = math.floor((i - 1) / cols)
          local col_idx = (i - 1) % cols
-         local tx = x + col_idx * (tile_w + gap)
-         local ty: number
-         if orientation == "row_top" then
-            ty = y + row_idx * (tile_h + gap)
-         else
-            ty = y + h - tile_h - row_idx * (tile_h + gap)
-         end
-         if ty < y or ty + tile_h > y + h then break end
-         tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
-            orientation = seat_orient, face_down = false,
-            accent_r = color.r, accent_g = color.g, accent_b = color.b,
-         })
-      end
-   else
-      local rows = math.floor((h + gap) / (tile_h + gap))
-      if rows < 1 then rows = 1 end
-      for i, t in ipairs(discards) do
-         local col_idx = math.floor((i - 1) / rows)
-         local row_idx = (i - 1) % rows
-         local tx: number
-         if orientation == "col_left" then
-            tx = x + col_idx * (tile_w + gap)
-         else
-            tx = x + w - tile_w - col_idx * (tile_w + gap)
-         end
-         local ty = y + row_idx * (tile_h + gap)
-         if tx < x or tx + tile_w > x + w then break end
+         local tx = tiles_x + col_idx * (tile_w + gap)
+         local ty = tiles_y + row_idx * (tile_h + gap)
+         if ty + tile_h > row_y + row_h then break end
          tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
             orientation = seat_orient, face_down = false,
             accent_r = color.r, accent_g = color.g, accent_b = color.b,
@@ -1407,15 +1517,15 @@ local function draw_hints(x: number, y: number)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
    if (state.deal.phase as string) == "opening_actions" then
       if has_swap_tiles_action() then
-         draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   F1 debug   ESC menu", x, y)
+         draw_text("Click tiles to mark for swap   /   click Use Fresh Start, then Confirm   /   D all-discards   F1 debug   ESC menu", x, y)
       else
-         draw_text("Click Confirm to begin play   /   F1 debug   ESC menu", x, y)
+         draw_text("Click Confirm to begin play   /   D all-discards   F1 debug   ESC menu", x, y)
       end
    elseif state.mode == "run" and has_seat1_pending_input(state.deal) then
       if (state.deal.phase as string) == "awaiting_action" and state.deal.current_player == 1 then
-         draw_text("Click a tile to select, click again to discard   /   buttons: Hu / Kong / Discard   /   F1 debug   ESC menu", x, y)
+         draw_text("Click a tile to select, click again to discard   /   buttons: Hu / Kong / Discard   /   D all-discards   F1 debug   ESC menu", x, y)
       else
-         draw_text("Click an action button   /   keys: H P K C X   /   F1 debug   ESC menu", x, y)
+         draw_text("Click an action button   /   keys: H P K C X   /   D all-discards   F1 debug   ESC menu", x, y)
       end
    else
       draw_text("F1 debug overlay   /   T step  S advance  R restart   /   ESC menu", x, y)
@@ -1569,8 +1679,12 @@ local function on_draw()
    -- spanning over them. Net effect: P2 / P4 get a tall, comfortable
    -- discard area; P3 / P1 get a narrower one constrained to the
    -- compass middle (still wide enough for a deal's worth of tiles).
-   local strip_thick_h <const>: number = 76   -- fits 2 rows of 34-tall tiles for late-deal overflow
-   local strip_thick_w <const>: number = 56
+   -- Strip thicknesses are sized to fit ONE row/col of 52-tall (rows)
+   -- or 52-wide (cols) discard tiles plus padding. Late-deal overflow
+   -- shows the most recent tiles + a "+N" hidden-count badge; the full
+   -- pile is always viewable via the discards modal (D key).
+   local strip_thick_h <const>: number = 60
+   local strip_thick_w <const>: number = 60
    local p3_disc_y = pile_y
    local p1_disc_y = pile_y + pile_h - strip_thick_h
 
@@ -1642,6 +1756,11 @@ local function on_draw()
    end
 
    draw_hints(margin, sh - hint_h)
+
+   -- Modal overlay rendered last so it sits on top of everything.
+   if state.discards_modal_open then
+      draw_discards_modal()
+   end
 end
 
 return {
