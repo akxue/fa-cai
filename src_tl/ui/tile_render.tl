@@ -7,7 +7,33 @@ require("core.types")
 require("game.deal_types")
 local assets = require("app.assets")
 
-local M = {}
+global enum SeatOrientation
+   "south"
+   "north"
+   "east"
+   "west"
+end
+
+global record Color
+   r: number
+   g: number
+   b: number
+end
+
+local record TileRenderModule
+   tile_label:       function(Tile): string
+   format_set:       function(TileSet): string
+   tile_order_key:   function(Tile): integer
+   sorted_indices:   function({Tile}): {integer}
+   draw_tile:        function(Tile, number, number, number, number, SeatOrientation, Color, Color)
+   draw_tile_back:   function(number, number, number, number, SeatOrientation, Color)
+   CREAM_FACE:       Color
+   PARCHMENT_ACCENT: Color
+   FACE_DOWN_ACCENT: Color
+   SET_ACCENT:       Color
+end
+
+local M: TileRenderModule = {} as TileRenderModule
 
 local KIND_LABEL: {string:string} = {
    east = "E", south = "S", west = "W", north = "N",
@@ -88,22 +114,13 @@ end
 -- (-90°), west=left (+90°). For face-down backs only the band placement
 -- matters; the back pattern is rotationally symmetric.
 
-global enum SeatOrientation
-   "south"
-   "north"
-   "east"
-   "west"
-end
-
-global record TileRenderOpts
-   orientation: SeatOrientation
-   accent_r:    number
-   accent_g:    number
-   accent_b:    number
-   face_r:      number
-   face_g:      number
-   face_b:      number
-end
+-- Shared accent / face constants. Callers reference these instead of
+-- building a fresh Color per tile, which would allocate ~9000 records
+-- per second at 150 tiles/frame × 60 fps.
+local CREAM_FACE      : Color = { r = 0.96, g = 0.94, b = 0.86 }
+local PARCHMENT_ACCENT: Color = { r = 0.55, g = 0.50, b = 0.40 }
+local FACE_DOWN_ACCENT: Color = { r = 0.30, g = 0.32, b = 0.40 }
+local SET_ACCENT      : Color = { r = 0.40, g = 0.55, b = 0.45 }
 
 local THICK <const>: number = 4   -- thickness-band depth in px
 local SHADOW_OFF <const>: number = 3
@@ -200,56 +217,39 @@ local function draw_back_pattern(fx: number, fy: number, fw: number, fh: number)
    love.graphics.rectangle("line", fx + inset, fy + inset, fw - 2 * inset, fh - 2 * inset)
 end
 
-local DEFAULT_ORIENTATION <const>: SeatOrientation = "south"
-local DEFAULT_ACCENT_R <const>: number = 0.55
-local DEFAULT_ACCENT_G <const>: number = 0.50
-local DEFAULT_ACCENT_B <const>: number = 0.40
-
-local function resolve_opts(opts: TileRenderOpts): SeatOrientation, number, number, number, number, number, number
-   if opts == nil then
-      return DEFAULT_ORIENTATION, DEFAULT_ACCENT_R, DEFAULT_ACCENT_G, DEFAULT_ACCENT_B, 0.96, 0.94, 0.86
-   end
-   local orientation = opts.orientation or DEFAULT_ORIENTATION
-   return orientation,
-      opts.accent_r or DEFAULT_ACCENT_R,
-      opts.accent_g or DEFAULT_ACCENT_G,
-      opts.accent_b or DEFAULT_ACCENT_B,
-      opts.face_r or 0.96,
-      opts.face_g or 0.94,
-      opts.face_b or 0.86
-end
-
-function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number, opts: TileRenderOpts)
-   local orientation, accent_r, accent_g, accent_b, face_r, face_g, face_b = resolve_opts(opts)
+function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number,
+                     orientation: SeatOrientation, accent: Color, face: Color)
    local info = ORIENTATION[orientation] or ORIENTATION.south
-
    draw_shadow(x, y, w, h)
    local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, info,
-      accent_r * 0.6, accent_g * 0.6, accent_b * 0.6)
-   draw_tile_face(fx, fy, fw, fh, face_r, face_g, face_b)
+      accent.r * 0.6, accent.g * 0.6, accent.b * 0.6)
+   draw_tile_face(fx, fy, fw, fh, face.r, face.g, face.b)
    local img = assets.tile_symbol(t.kind_id as string)
    if img ~= nil then
       draw_symbol(img, fx, fy, fw, fh, info)
    else
       draw_text_label(t, fx, fy, fw, fh)
    end
-   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
+   love.graphics.setColor(accent.r, accent.g, accent.b, 1.0)
    love.graphics.rectangle("line", fx, fy, fw, fh)
 end
 
--- Face-down tile back. Used for opponents' concealed tiles. Tile
--- identity isn't displayed, so no Tile arg; orientation only affects
--- the thickness band placement (the back pattern is symmetric).
-function M.draw_tile_back(x: number, y: number, w: number, h: number, opts: TileRenderOpts)
-   local orientation, accent_r, accent_g, accent_b = resolve_opts(opts)
+-- Face-down tile back. No Tile arg (identity not shown); orientation
+-- only affects band placement since the back pattern is symmetric.
+function M.draw_tile_back(x: number, y: number, w: number, h: number,
+                          orientation: SeatOrientation, accent: Color)
    local info = ORIENTATION[orientation] or ORIENTATION.south
-
    draw_shadow(x, y, w, h)
    local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, info,
-      accent_r * 0.6, accent_g * 0.6, accent_b * 0.6)
+      accent.r * 0.6, accent.g * 0.6, accent.b * 0.6)
    draw_back_pattern(fx, fy, fw, fh)
-   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
+   love.graphics.setColor(accent.r, accent.g, accent.b, 1.0)
    love.graphics.rectangle("line", fx, fy, fw, fh)
 end
+
+M.CREAM_FACE       = CREAM_FACE
+M.PARCHMENT_ACCENT = PARCHMENT_ACCENT
+M.FACE_DOWN_ACCENT = FACE_DOWN_ACCENT
+M.SET_ACCENT       = SET_ACCENT
 
 return M

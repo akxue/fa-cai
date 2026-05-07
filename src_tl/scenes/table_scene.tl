@@ -809,19 +809,23 @@ local SEAT_NAMES: {string} = { "East (P1)", "South (P2)", "West (P3)", "North (P
 -- tiles read as 3D from that seat's perspective.
 local SEAT_ORIENT: {SeatOrientation} = { "south", "east", "north", "west" }
 
--- Per-seat discard color (used to tint each tile's border in the center
--- discard pile so players can see at a glance who threw what).
-local record SeatColor
-   r: number
-   g: number
-   b: number
-end
-local SEAT_COLORS: {SeatColor} = {
+-- Per-seat discard accent: tints each discarded tile's border so the
+-- player sees who threw what at a glance.
+local SEAT_COLORS: {Color} = {
    { r = 0.42, g = 0.62, b = 0.95 },  -- P1 East   = blue (you)
    { r = 0.95, g = 0.45, b = 0.40 },  -- P2 South  = red
    { r = 0.55, g = 0.85, b = 0.50 },  -- P3 West   = green
    { r = 0.95, g = 0.85, b = 0.40 },  -- P4 North  = gold
 }
+
+-- Player-hand state colours (cursor / selected / normal) hoisted to
+-- module scope so each tile draw uses a shared instance instead of
+-- allocating a fresh Color record per frame.
+local PLAYER_HAND_FACE     : Color = { r = 0.92, g = 0.90, b = 0.82 }
+local PLAYER_HAND_ACCENT   : Color = { r = 0.55, g = 0.50, b = 0.40 }
+local PLAYER_SELECTED_ACCENT: Color = { r = 1.00, g = 0.90, b = 0.30 }
+local PLAYER_CURSOR_FACE   : Color = { r = 1.00, g = 0.97, b = 0.78 }
+local PLAYER_CURSOR_ACCENT : Color = { r = 1.00, g = 0.55, b = 0.20 }
 
 local function draw_text(text: string, x: number, y: number)
    love.graphics.print(text, x, y)
@@ -961,17 +965,13 @@ local function draw_opponent_hand(seat_index: integer, x: number, y: number, w: 
       local idxs = sorted_indices(p.hand.concealed_tiles)
       for slot, src in ipairs(idxs) do
          local t = p.hand.concealed_tiles[src]
-         tile_render.draw_tile(t, start_x + (slot - 1) * dx, start_y + (slot - 1) * dy, tile_w, tile_h, {
-            orientation = orientation,
-            accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
-         })
+         tile_render.draw_tile(t, start_x + (slot - 1) * dx, start_y + (slot - 1) * dy, tile_w, tile_h,
+            orientation, tile_render.PARCHMENT_ACCENT, tile_render.CREAM_FACE)
       end
    else
       for i = 1, n do
-         tile_render.draw_tile_back(start_x + (i - 1) * dx, start_y + (i - 1) * dy, tile_w, tile_h, {
-            orientation = orientation,
-            accent_r = 0.30, accent_g = 0.32, accent_b = 0.40,
-         })
+         tile_render.draw_tile_back(start_x + (i - 1) * dx, start_y + (i - 1) * dy, tile_w, tile_h,
+            orientation, tile_render.FACE_DOWN_ACCENT)
       end
    end
 end
@@ -1010,10 +1010,8 @@ local function draw_seat_open_sets(seat_index: integer, x: number, y: number, w:
    for _, s in ipairs(p.hand.sets) do
       for _, t in ipairs(s.tiles) do
          if axis == "col" and cy + tile_h > y + h - pad then return end
-         tile_render.draw_tile(t, cx, cy, tile_w, tile_h, {
-            orientation = orientation,
-            accent_r = 0.40, accent_g = 0.55, accent_b = 0.45,
-         })
+         tile_render.draw_tile(t, cx, cy, tile_w, tile_h,
+            orientation, tile_render.SET_ACCENT, tile_render.CREAM_FACE)
          cx = cx + dx
          cy = cy + dy
       end
@@ -1094,10 +1092,7 @@ local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: n
          tx = x + w - tile_w
          ty = y + i * (tile_h + gap)
       end
-      tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
-         orientation = seat_orient,
-         accent_r = color.r, accent_g = color.g, accent_b = color.b,
-      })
+      tile_render.draw_tile(t, tx, ty, tile_w, tile_h, seat_orient, color, tile_render.CREAM_FACE)
    end
 
    if hidden > 0 then
@@ -1160,10 +1155,7 @@ local function draw_discards_modal()
          local tx = tiles_x + col_idx * (tile_w + gap)
          local ty = tiles_y + row_idx * (tile_h + gap)
          if ty + tile_h > row_y + row_h then break end
-         tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
-            orientation = seat_orient,
-            accent_r = color.r, accent_g = color.g, accent_b = color.b,
-         })
+         tile_render.draw_tile(t, tx, ty, tile_w, tile_h, seat_orient, color, tile_render.CREAM_FACE)
       end
    end
 end
@@ -1210,8 +1202,6 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
    for slot, src_i in ipairs(idxs) do
       local t = tiles[src_i]
       local tx = start_x + (slot - 1) * (tile_w + gap)
-      local fr, fg, fb = 0.92, 0.90, 0.82
-      local br, bg, bb = 0.55, 0.50, 0.40
       local selected = false
       for _, id in ipairs(state.selected_opening_tile_ids) do
          if id == t.tile_id then selected = true; break end
@@ -1219,18 +1209,15 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
       local is_cursor = (state.cursor_tile_id as string) ~= ""
          and t.tile_id == state.cursor_tile_id
          and can_click_discard
-      if selected then
-         br, bg, bb = 1.00, 0.90, 0.30
-      end
+
+      local accent = PLAYER_HAND_ACCENT
+      local face = PLAYER_HAND_FACE
+      if selected then accent = PLAYER_SELECTED_ACCENT end
       if is_cursor then
-         fr, fg, fb = 1.00, 0.97, 0.78
-         br, bg, bb = 1.00, 0.55, 0.20
+         accent = PLAYER_CURSOR_ACCENT
+         face   = PLAYER_CURSOR_FACE
       end
-      tile_render.draw_tile(t, tx, row_y, tile_w, tile_h, {
-         orientation = "south",
-         accent_r = br, accent_g = bg, accent_b = bb,
-         face_r = fr, face_g = fg, face_b = fb,
-      })
+      tile_render.draw_tile(t, tx, row_y, tile_w, tile_h, "south", accent, face)
 
       if can_click_discard then
          -- Two-click confirm: a click on a non-selected tile sets it as
