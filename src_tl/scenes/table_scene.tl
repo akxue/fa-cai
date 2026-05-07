@@ -1506,54 +1506,61 @@ local function on_draw()
    local p1_hand_h   = 116 -- player hand strip (face-up, ~80px tiles + title)
    local p1_public_h = 60
 
-   -- P3 (top): hand row, then open-sets row below it.
+   -- P3 hand row (top, full table_w).
    local p3_hand_y   = table_y
-   local p3_public_y = p3_hand_y + edge_short + 4
    draw_opponent_hand_row(3, table_x, p3_hand_y, table_w, edge_short)
-   draw_seat_open_sets_row(3, table_x, p3_public_y, table_w, public_short)
 
-   -- P1 (bottom): open-sets row, then hand row.
+   -- P1 hand row (bottom, full table_w).
    local p1_hand_y   = table_y + table_h - p1_hand_h
-   local p1_public_y = p1_hand_y - p1_public_h - 4
-   draw_seat_open_sets_row(1, table_x, p1_public_y, table_w, p1_public_h)
    draw_player_hand_row(table_x, p1_hand_y, table_w, p1_hand_h)
 
-   -- Side region between top and bottom strips.
-   local side_y = p3_public_y + public_short + 8
-   local side_h = p1_public_y - 8 - side_y
+   -- Side region: starts right under P3's hand row, ends right above
+   -- P1's hand row. Spans the full vertical between the two hand rows
+   -- so P4/P2 hand and open-sets cols are tall and discard cols inside
+   -- the centre fill the same height. The P3/P1 open-sets sub-rows
+   -- live INSIDE the centre column (narrower than the full table_w);
+   -- they no longer eat vertical space on the sides.
+   local side_y = p3_hand_y + edge_short + 8
+   local side_h = p1_hand_y - 8 - side_y
 
-   -- P4 (left): hand col + open-sets col.
+   -- P4 (left): hand col + open-sets col, both spanning the full side_h.
    local p4_hand_x   = table_x
    local p4_public_x = p4_hand_x + edge_short + 4
    draw_opponent_hand_col(4, p4_hand_x, side_y, edge_short, side_h)
    draw_seat_open_sets_col(4, p4_public_x, side_y, public_short, side_h)
 
-   -- P2 (right): hand col + open-sets col.
+   -- P2 (right): hand col + open-sets col, both spanning the full side_h.
    local p2_hand_x   = table_x + table_w - edge_short
    local p2_public_x = p2_hand_x - public_short - 4
    draw_opponent_hand_col(2, p2_hand_x, side_y, edge_short, side_h)
    draw_seat_open_sets_col(2, p2_public_x, side_y, public_short, side_h)
 
-   -- Center area inside the side strips. Stacks vertically:
-   --   info strip (top)   →  discard zone (middle)
-   -- The discard zone is four per-seat strips that radiate from each
-   -- player's edge toward the compass medallion drawn on the bg. The
-   -- bottom-bar boons + known wall live outside the felt now (s10), so
-   -- pile_h reclaims the vertical they used to occupy in here.
+   -- Centre column inside the side strips. Stacks vertically:
+   --   info panel (top)
+   --   P3 open-sets sub-row     ← narrow (centre-column wide), not full table_w
+   --   discard zone             ← P3 disc row + P4/P2 disc cols + P1 disc row
+   --   P1 open-sets sub-row     ← narrow
+   -- The discard zone's four per-seat strips radiate from each player's
+   -- edge toward the compass medallion drawn on the bg.
    -- info_h shrinks outside opening_actions phase so the discard zone
    -- gets the room it needs; the opening UI's buttons need the full 130.
    local center_x = p4_public_x + public_short + 8
    local center_w = p2_public_x - center_x - 8
    local center_y = side_y
-   local info_strip_h = 26
    local in_opening = (state.deal.phase as string) == "opening_actions"
    local info_h = in_opening and 130 or 70
-   local pile_h = side_h - info_h - 8
-   if pile_h < 100 then pile_h = 100 end
 
    draw_center_info(center_x, center_y, center_w, info_h)
 
-   local pile_y = center_y + info_h + 4
+   local p3_sets_y = center_y + info_h + 4
+   draw_seat_open_sets_row(3, center_x, p3_sets_y, center_w, public_short)
+
+   local p1_sets_y = center_y + side_h - public_short
+   draw_seat_open_sets_row(1, center_x, p1_sets_y, center_w, p1_public_h)
+
+   local pile_y = p3_sets_y + public_short + 4
+   local pile_h = p1_sets_y - 4 - pile_y
+   if pile_h < 100 then pile_h = 100 end
 
    -- Discard layout: per-seat strips around a central compass area.
    -- The vertical P2 / P4 strips span the full pile height (top of P3
@@ -1595,6 +1602,7 @@ local function on_draw()
    local cand_w = 280
    local boon_x = margin
    local cand_x = sw - margin - cand_w
+   local info_strip_h = 26
    info_panels.draw_boon_strip(state.deal, 1, boon_x, bar_y, boon_w, info_strip_h)
    info_panels.draw_known_wall(state.deal, 1, cand_x, bar_y, cand_w, info_strip_h)
 
