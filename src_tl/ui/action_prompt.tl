@@ -64,9 +64,9 @@ end
 -- Used in the outer bottom-bar action strip where vertical real-estate is
 -- limited but horizontal isn't. Each button shows the keybind on top and
 -- the label below. No frame around the row — caller provides any
--- surrounding chrome.
+-- surrounding chrome. Buttons shrink to fit so they never overflow the
+-- bounds; very narrow strips are the caller's problem to avoid.
 local BTN_MAX_W <const>: integer = 160
-local BTN_MIN_W <const>: integer = 80
 local BTN_GAP   <const>: integer = 8
 
 function M.draw_horizontal(opts: {ActionPromptOption}, x: number, y: number, w: number, h: number): {OptionRect}
@@ -76,7 +76,7 @@ function M.draw_horizontal(opts: {ActionPromptOption}, x: number, y: number, w: 
    local n = #opts
    local btn_w = math.floor((w - BTN_GAP * (n - 1)) / n)
    if btn_w > BTN_MAX_W then btn_w = BTN_MAX_W end
-   if btn_w < BTN_MIN_W then btn_w = BTN_MIN_W end
+   if btn_w < 1 then btn_w = 1 end
    local btn_h = h
    local total_w = btn_w * n + BTN_GAP * (n - 1)
    local start_x = x + (w - total_w) / 2

@@ -714,9 +714,11 @@ local function on_mousepressed(x: number, y: number, mouse_button: integer)
 end
 
 local function on_keypressed(key: string)
-   -- ESC closes the discards modal first if it's open; otherwise it
-   -- abandons the deal. This is the standard "back" hierarchy.
-   if state.discards_modal_open and (key == "escape" or key == "d") then
+   -- Modal is fully blocking: any key dismisses it and consumes the
+   -- input. Mirrors the click-anywhere-to-dismiss in on_mousepressed —
+   -- so neither input channel reaches the underlying scene while the
+   -- modal is up.
+   if state.discards_modal_open then
       state.discards_modal_open = false
       return
    end
@@ -824,11 +826,10 @@ local SEAT_COLORS: {Color} = {
    { r = 0.95, g = 0.85, b = 0.40 },  -- P4 North  = gold
 }
 
--- Player-hand state colours (cursor / selected / normal) hoisted to
--- module scope so each tile draw uses a shared instance instead of
--- allocating a fresh Color record per frame.
+-- Player-hand state colours. Face is slightly darker than CREAM_FACE so
+-- the player's own hand reads as more "weighty" than the called sets.
+-- Default accent reuses tile_render.PARCHMENT_ACCENT.
 local PLAYER_HAND_FACE     : Color = { r = 0.92, g = 0.90, b = 0.82 }
-local PLAYER_HAND_ACCENT   : Color = { r = 0.55, g = 0.50, b = 0.40 }
 local PLAYER_SELECTED_ACCENT: Color = { r = 1.00, g = 0.90, b = 0.30 }
 local PLAYER_CURSOR_FACE   : Color = { r = 1.00, g = 0.97, b = 0.78 }
 local PLAYER_CURSOR_ACCENT : Color = { r = 1.00, g = 0.55, b = 0.20 }
@@ -1108,7 +1109,9 @@ local function draw_discards_modal()
 
    local title_y = panel_y + 4
    love.graphics.setColor(0.65, 0.65, 0.72, 1.0)
-   love.graphics.print("ESC / D / click to close", panel_x + panel_w - 200, title_y)
+   local close_hint = "Any key or click to close"
+   local font_h = love.graphics.getFont():getWidth(close_hint)
+   love.graphics.print(close_hint, panel_x + panel_w - font_h - 16, title_y)
 
    local content_y = panel_y + 28
    local content_h = panel_h - 36
@@ -1136,6 +1139,8 @@ local function draw_discards_modal()
       if cols < 1 then cols = 1 end
 
       local seat_orient = SEAT_ORIENT[seat]
+      local total = #p.hand.discards
+      local shown = 0
       for i, t in ipairs(p.hand.discards) do
          local row_idx = math.floor((i - 1) / cols)
          local col_idx = (i - 1) % cols
@@ -1143,6 +1148,15 @@ local function draw_discards_modal()
          local ty = tiles_y + row_idx * (tile_h + gap)
          if ty + tile_h > row_y + row_h then break end
          tile_render.draw_tile(t, tx, ty, tile_w, tile_h, seat_orient, color, tile_render.CREAM_FACE)
+         shown = i
+      end
+      if shown < total then
+         local hidden = total - shown
+         local more = "  (+" .. tostring(hidden) .. " more)"
+         local title_w = font:getWidth(title)
+         local count_w = font:getWidth(count_label)
+         love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
+         love.graphics.print(more, panel_x + 16 + title_w + count_w, row_y + 4)
       end
    end
 end
@@ -1201,7 +1215,7 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
          and t.tile_id == state.cursor_tile_id
          and can_click_discard
 
-      local accent = PLAYER_HAND_ACCENT
+      local accent = tile_render.PARCHMENT_ACCENT
       local face = PLAYER_HAND_FACE
       if selected then accent = PLAYER_SELECTED_ACCENT end
       if is_cursor then
@@ -1258,9 +1272,13 @@ local PILL_W <const>: integer = 100
 local PILL_H <const>: integer = 24
 local PILL_GAP <const>: integer = 4
 
-local function draw_pill(x: number, y: number, text: string, accent_r: number, accent_g: number, accent_b: number)
+local PILL_ROUND_ACCENT: Color = { r = 1.00, g = 0.55, b = 0.20 }
+local PILL_LIFE_ACCENT : Color = { r = 0.95, g = 0.30, b = 0.30 }
+local PILL_WALL_ACCENT : Color = { r = 0.55, g = 0.85, b = 0.55 }
+
+local function draw_pill(x: number, y: number, text: string, accent: Color)
    draw_panel(x, y, PILL_W, PILL_H, "")
-   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
+   love.graphics.setColor(accent.r, accent.g, accent.b, 1.0)
    love.graphics.rectangle("fill", x, y, 4, PILL_H)
    love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
    love.graphics.print(text, x + 12, y + 5)
@@ -1270,12 +1288,13 @@ local function draw_corner_hud(x: number, y: number)
    local rs = state.run_state
    local d = state.deal
    local round_text = (rs ~= nil) and ("Round " .. tostring(rs.round_index)) or "Round —"
-   local lives_text = (rs ~= nil) and string.format("%d Life", rs.lives) or "— Life"
+   local lives_word = (rs ~= nil and rs.lives == 1) and "Life" or "Lives"
+   local lives_text = (rs ~= nil) and (tostring(rs.lives) .. " " .. lives_word) or "— Lives"
    local wall_text  = "Wall " .. tostring(wall_mod.remaining(d.wall))
 
-   draw_pill(x, y,                              round_text, 1.00, 0.55, 0.20)
-   draw_pill(x, y + (PILL_H + PILL_GAP),        lives_text, 0.95, 0.30, 0.30)
-   draw_pill(x, y + (PILL_H + PILL_GAP) * 2,    wall_text,  0.55, 0.85, 0.55)
+   draw_pill(x, y,                              round_text, PILL_ROUND_ACCENT)
+   draw_pill(x, y + (PILL_H + PILL_GAP),        lives_text, PILL_LIFE_ACCENT)
+   draw_pill(x, y + (PILL_H + PILL_GAP) * 2,    wall_text,  PILL_WALL_ACCENT)
 end
 
 -- Center info panel. Shows current turn / phase / wall on the first
@@ -1475,10 +1494,6 @@ local function draw_hints(x: number, y: number)
    end
 end
 
-local function dispatch_option(opt: ActionPromptOption)
-   apply_player_action(opt.action, opt.label)
-end
-
 local function on_draw()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
@@ -1615,12 +1630,12 @@ local function on_draw()
    if bar_h < 60 then bar_h = 60 end
 
    local boon_w = 360
-   local cand_w = 280
+   local wall_w = 280
    local boon_x = margin
-   local cand_x = sw - margin - cand_w
+   local wall_x = sw - margin - wall_w
    local info_strip_h = 26
-   info_panels.draw_boon_strip(state.deal, 1, boon_x, bar_y, boon_w, info_strip_h, state.ticks)
-   info_panels.draw_known_wall(state.deal, 1, cand_x, bar_y, cand_w, info_strip_h, state.ticks)
+   info_panels.draw_boon_strip(state.deal, 1, boon_x, bar_y, boon_w, info_strip_h)
+   info_panels.draw_known_wall(state.deal, 1, wall_x, bar_y, wall_w, info_strip_h)
 
    -- Action prompt fills the gap between boons and known-wall, drawn as
    -- a horizontal button row (existing vertical-list layout overflows
@@ -1631,7 +1646,7 @@ local function on_draw()
       local kind: CachedOptsKind = phase == "reaction_window" and "reaction" or "self"
       local opts = options_cached(d, kind)
       local action_x = boon_x + boon_w + 12
-      local action_w = cand_x - action_x - 12
+      local action_w = wall_x - action_x - 12
       local action_y = bar_y + info_strip_h + 4
       local action_h = bar_h - info_strip_h - 4
       if action_h < 36 then action_h = 36 end
@@ -1640,7 +1655,7 @@ local function on_draw()
          local opt = opts[i]
          state.clickables[#state.clickables + 1] = {
             x = r.x, y = r.y, w = r.w, h = r.h,
-            callback = function() dispatch_option(opt) end,
+            callback = function() apply_player_action(opt.action, opt.label) end,
          }
       end
    end

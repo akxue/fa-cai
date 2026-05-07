@@ -81,14 +81,10 @@ end
 -- reads against the busy garden background.
 local MENU_BG_ALPHA <const>: number = 0.55
 
-function M.draw_bg_dimmed(overlay_alpha: number)
-   M.draw_bg_cover()
-   love.graphics.setColor(0.05, 0.06, 0.08, overlay_alpha)
-   love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
-end
-
 function M.draw_menu_bg()
-   M.draw_bg_dimmed(MENU_BG_ALPHA)
+   M.draw_bg_cover()
+   love.graphics.setColor(0.05, 0.06, 0.08, MENU_BG_ALPHA)
+   love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
 end
 
 -- Green-felt rect of the bg_table image, in image-pixel coordinates.

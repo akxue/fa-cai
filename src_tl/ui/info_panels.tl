@@ -1,7 +1,10 @@
 -- Player-facing info strips: active boons (with counters) and known-wall
--- reveals. Both cache their per-frame derived data (sorted boon list,
--- wall id→Tile lookup) keyed on a tick the scene passes in. Engine
--- transitions advance the tick; UI-only frames hit the cache.
+-- reveals. Both cache derived per-frame data (sorted boon list, wall
+-- id→Tile lookup) keyed on the DealState pointer. The engine returns
+-- a new deal table on every action, so pointer identity changes exactly
+-- when state changes; UI-only frames keep the same pointer and hit the
+-- cache. Reset gives a fresh deal pointer, so the cache invalidates
+-- across deals automatically.
 
 require("game.deal_types")
 require("effects.effect_types")
@@ -19,12 +22,12 @@ local function sorted_keys(t: {string:integer}): {string}
    return keys
 end
 
-local boon_cache_tick: integer = -1
+local boon_cache_deal: DealState
 local boon_cache_owner: integer = 0
 local boon_cache_list: {ActiveEffectState} = {}
 
-local function owned_boons_sorted(d: DealState, owner_index: integer, tick_key: integer): {ActiveEffectState}
-   if tick_key == boon_cache_tick and owner_index == boon_cache_owner then
+local function owned_boons_sorted(d: DealState, owner_index: integer): {ActiveEffectState}
+   if d == boon_cache_deal and owner_index == boon_cache_owner then
       return boon_cache_list
    end
    local owned: {ActiveEffectState} = {}
@@ -34,16 +37,16 @@ local function owned_boons_sorted(d: DealState, owner_index: integer, tick_key: 
    table.sort(owned, function(a: ActiveEffectState, b: ActiveEffectState): boolean
       return a.effect_id < b.effect_id
    end)
-   boon_cache_tick = tick_key
+   boon_cache_deal = d
    boon_cache_owner = owner_index
    boon_cache_list = owned
    return owned
 end
 
-function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number, tick_key: integer)
+function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
    panel.draw(x, y, w, h, "Boons")
 
-   local owned = owned_boons_sorted(d, owner_index, tick_key)
+   local owned = owned_boons_sorted(d, owner_index)
    if #owned == 0 then
       love.graphics.setColor(0.55, 0.55, 0.60, 1.0)
       love.graphics.print("(none)", x + 60, y + 4)
@@ -67,19 +70,19 @@ function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: num
    end
 end
 
-local wall_cache_tick: integer = -1
+local wall_cache_deal: DealState
 local wall_cache: {string: Tile} = {}
 
-local function wall_by_id(d: DealState, tick_key: integer): {string: Tile}
-   if tick_key == wall_cache_tick then return wall_cache end
+local function wall_by_id(d: DealState): {string: Tile}
+   if d == wall_cache_deal then return wall_cache end
    local by_id: {string: Tile} = {}
    for _, t in ipairs(d.wall.tiles) do by_id[t.tile_id as string] = t end
-   wall_cache_tick = tick_key
+   wall_cache_deal = d
    wall_cache = by_id
    return by_id
 end
 
-function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number, tick_key: integer)
+function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
    panel.draw(x, y, w, h, "Known Wall")
 
    local ids = d.players[owner_index].known_wall_tile_ids
@@ -89,7 +92,7 @@ function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: num
       return
    end
 
-   local by_id = wall_by_id(d, tick_key)
+   local by_id = wall_by_id(d)
    local tile_w = 22
    local tile_h = h - 8
    local gap = 3
