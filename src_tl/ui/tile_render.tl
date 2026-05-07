@@ -106,27 +106,17 @@ end
 -- ── Drawing helpers (require love.graphics) ──────────────────────────────
 
 -- Layered render: shadow → thickness band on the table-side edge →
--- face (cream rect + bevel) → symbol image (rotated to the seat) or
--- text fallback. The band fakes 3D so the tile reads as a slab on the
--- felt rather than a flat sticker.
---
--- Orientation: south=player, north=top opponent (180°), east=right
--- (-90°), west=left (+90°). For face-down backs only the band placement
--- matters; the back pattern is rotationally symmetric.
+-- face → symbol image (rotated per seat) or text fallback. The band
+-- fakes 3D so the tile reads as a slab on the felt.
 
--- Shared accent / face constants. Callers reference these instead of
--- building a fresh Color per tile, which would allocate ~9000 records
--- per second at 150 tiles/frame × 60 fps.
 local CREAM_FACE      : Color = { r = 0.96, g = 0.94, b = 0.86 }
 local PARCHMENT_ACCENT: Color = { r = 0.55, g = 0.50, b = 0.40 }
 local FACE_DOWN_ACCENT: Color = { r = 0.30, g = 0.32, b = 0.40 }
 local SET_ACCENT      : Color = { r = 0.40, g = 0.55, b = 0.45 }
 
-local THICK <const>: number = 4   -- thickness-band depth in px
+local THICK <const>: number = 4
 local SHADOW_OFF <const>: number = 3
 
--- One lookup per draw_tile call replaces string-compare chains in
--- band/rotation/symbol helpers. Called ~150 times/frame.
 local record OrientationInfo
    rotation:         number
    band_edge:        string   -- "s" | "n" | "e" | "w"
@@ -217,12 +207,21 @@ local function draw_back_pattern(fx: number, fy: number, fw: number, fh: number)
    love.graphics.rectangle("line", fx + inset, fy + inset, fw - 2 * inset, fh - 2 * inset)
 end
 
+-- Shadow + thickness band; returns the face rect for body draws.
+local function draw_chrome_pre(x: number, y: number, w: number, h: number, info: OrientationInfo, accent: Color): number, number, number, number
+   draw_shadow(x, y, w, h)
+   return draw_thickness_band(x, y, w, h, info, accent.r * 0.6, accent.g * 0.6, accent.b * 0.6)
+end
+
+local function draw_chrome_post(fx: number, fy: number, fw: number, fh: number, accent: Color)
+   love.graphics.setColor(accent.r, accent.g, accent.b, 1.0)
+   love.graphics.rectangle("line", fx, fy, fw, fh)
+end
+
 function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number,
                      orientation: SeatOrientation, accent: Color, face: Color)
-   local info = ORIENTATION[orientation] or ORIENTATION.south
-   draw_shadow(x, y, w, h)
-   local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, info,
-      accent.r * 0.6, accent.g * 0.6, accent.b * 0.6)
+   local info = ORIENTATION[orientation]
+   local fx, fy, fw, fh = draw_chrome_pre(x, y, w, h, info, accent)
    draw_tile_face(fx, fy, fw, fh, face.r, face.g, face.b)
    local img = assets.tile_symbol(t.kind_id as string)
    if img ~= nil then
@@ -230,21 +229,15 @@ function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number,
    else
       draw_text_label(t, fx, fy, fw, fh)
    end
-   love.graphics.setColor(accent.r, accent.g, accent.b, 1.0)
-   love.graphics.rectangle("line", fx, fy, fw, fh)
+   draw_chrome_post(fx, fy, fw, fh, accent)
 end
 
--- Face-down tile back. No Tile arg (identity not shown); orientation
--- only affects band placement since the back pattern is symmetric.
 function M.draw_tile_back(x: number, y: number, w: number, h: number,
                           orientation: SeatOrientation, accent: Color)
-   local info = ORIENTATION[orientation] or ORIENTATION.south
-   draw_shadow(x, y, w, h)
-   local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, info,
-      accent.r * 0.6, accent.g * 0.6, accent.b * 0.6)
+   local info = ORIENTATION[orientation]
+   local fx, fy, fw, fh = draw_chrome_pre(x, y, w, h, info, accent)
    draw_back_pattern(fx, fy, fw, fh)
-   love.graphics.setColor(accent.r, accent.g, accent.b, 1.0)
-   love.graphics.rectangle("line", fx, fy, fw, fh)
+   draw_chrome_post(fx, fy, fw, fh, accent)
 end
 
 M.CREAM_FACE       = CREAM_FACE
