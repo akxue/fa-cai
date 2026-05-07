@@ -1,14 +1,39 @@
 -- Pure presentation helpers for tile labels, set strings, and a
--- mahjong-friendly display ordering. No LÖVE imports — these helpers
--- format strings and compute index arrays so they can be reused by any
--- scene (table, reward, debug inspector). Geometric drawing helpers that
--- need love.graphics live in this module too, but the formatting half is
--- usable from contexts that don't render.
+-- mahjong-friendly display ordering. The formatting half is usable from
+-- contexts that don't render. The drawing half (M.draw_tile and the
+-- back-compat shims) requires love.graphics and the assets module.
 
 require("core.types")
 require("game.deal_types")
+local assets = require("app.assets")
 
-local M = {}
+global enum SeatOrientation
+   "south"
+   "north"
+   "east"
+   "west"
+end
+
+global record Color
+   r: number
+   g: number
+   b: number
+end
+
+local record TileRenderModule
+   tile_label:       function(Tile): string
+   format_set:       function(TileSet): string
+   tile_order_key:   function(Tile): integer
+   sorted_indices:   function({Tile}): {integer}
+   draw_tile:        function(Tile, number, number, number, number, SeatOrientation, Color, Color)
+   draw_tile_back:   function(number, number, number, number, SeatOrientation, Color)
+   CREAM_FACE:       Color
+   PARCHMENT_ACCENT: Color
+   FACE_DOWN_ACCENT: Color
+   SET_ACCENT:       Color
+end
+
+local M: TileRenderModule = {} as TileRenderModule
 
 local KIND_LABEL: {string:string} = {
    east = "E", south = "S", west = "W", north = "N",
@@ -80,28 +105,144 @@ end
 
 -- ── Drawing helpers (require love.graphics) ──────────────────────────────
 
--- A single tile rectangle with its label centered. The tile rectangle's
--- left edge sits at `x` and its top edge at `y`; size is `w` x `h`. The
--- color triplets are RGB (0..1); alpha is 1.
-function M.draw_tile_box(t: Tile, x: number, y: number, w: number, h: number, fill_r: number, fill_g: number, fill_b: number, border_r: number, border_g: number, border_b: number)
+-- Layered render: shadow → thickness band on the table-side edge →
+-- face → symbol image (rotated per seat) or text fallback. The band
+-- fakes 3D so the tile reads as a slab on the felt.
+
+local CREAM_FACE      : Color = { r = 0.96, g = 0.94, b = 0.86 }
+local PARCHMENT_ACCENT: Color = { r = 0.55, g = 0.50, b = 0.40 }
+local FACE_DOWN_ACCENT: Color = { r = 0.30, g = 0.32, b = 0.40 }
+local SET_ACCENT      : Color = { r = 0.40, g = 0.55, b = 0.45 }
+
+local THICK <const>: number = 4
+local SHADOW_OFF <const>: number = 3
+
+local record OrientationInfo
+   rotation:         number
+   band_edge:        string   -- "s" | "n" | "e" | "w"
+   sym_axes_swapped: boolean  -- east/west (90° rotation)
+end
+
+local ORIENTATION: {SeatOrientation: OrientationInfo} = {
+   south = { rotation = 0,            band_edge = "s", sym_axes_swapped = false },
+   north = { rotation = math.pi,      band_edge = "n", sym_axes_swapped = false },
+   east  = { rotation = -math.pi / 2, band_edge = "e", sym_axes_swapped = true  },
+   west  = { rotation =  math.pi / 2, band_edge = "w", sym_axes_swapped = true  },
+}
+
+local function draw_shadow(x: number, y: number, w: number, h: number)
+   love.graphics.setColor(0.0, 0.0, 0.0, 0.30)
+   love.graphics.rectangle("fill", x + SHADOW_OFF, y + SHADOW_OFF, w, h)
+end
+
+-- Draw the thickness band on whichever edge is "down" for the seat.
+-- Returns the inset face rect for the main face draw.
+local function draw_thickness_band(x: number, y: number, w: number, h: number, info: OrientationInfo,
+                                   r: number, g: number, b: number): number, number, number, number
+   love.graphics.setColor(r, g, b, 1.0)
+   local edge = info.band_edge
+   if edge == "n" then
+      love.graphics.rectangle("fill", x, y, w, THICK)
+      return x, y + THICK, w, h - THICK
+   elseif edge == "e" then
+      love.graphics.rectangle("fill", x + w - THICK, y, THICK, h)
+      return x, y, w - THICK, h
+   elseif edge == "w" then
+      love.graphics.rectangle("fill", x, y, THICK, h)
+      return x + THICK, y, w - THICK, h
+   else
+      love.graphics.rectangle("fill", x, y + h - THICK, w, THICK)
+      return x, y, w, h - THICK
+   end
+end
+
+local function draw_tile_face(fx: number, fy: number, fw: number, fh: number, fill_r: number, fill_g: number, fill_b: number)
    love.graphics.setColor(fill_r, fill_g, fill_b, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(border_r, border_g, border_b, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
+   love.graphics.rectangle("fill", fx, fy, fw, fh)
+   love.graphics.setColor(1.0, 1.0, 1.0, 0.35)
+   love.graphics.rectangle("fill", fx, fy, fw, 1)
+   love.graphics.rectangle("fill", fx, fy, 1, fh)
+end
+
+-- Composite the symbol image at the centre of the face. Symbol is
+-- 128×128 and inset 12% so it breathes; for 90/270° rotations the
+-- target dimensions are swapped so the symbol still fills the face.
+local function draw_symbol(img: Image, fx: number, fy: number, fw: number, fh: number, info: OrientationInfo)
+   local pad_w = fw * 0.12
+   local pad_h = fh * 0.12
+   local target_w = fw - pad_w * 2
+   local target_h = fh - pad_h * 2
+   local iw = img:getWidth()
+   local ih = img:getHeight()
+   local sx, sy: number, number
+   if info.sym_axes_swapped then
+      sx = target_h / iw
+      sy = target_w / ih
+   else
+      sx = target_w / iw
+      sy = target_h / ih
+   end
+   love.graphics.setColor(1, 1, 1, 1)
+   love.graphics.draw(img, fx + fw / 2, fy + fh / 2, info.rotation, sx, sy, iw / 2, ih / 2)
+end
+
+local function draw_text_label(t: Tile, fx: number, fy: number, fw: number, fh: number)
    love.graphics.setColor(0.10, 0.10, 0.12, 1.0)
    local label = M.tile_label(t)
    local font = love.graphics.getFont()
-   local fw = font:getWidth(label)
-   local fh = font:getHeight()
-   love.graphics.print(label, x + (w - fw) / 2, y + (h - fh) / 2)
+   local tw = font:getWidth(label)
+   local th = font:getHeight()
+   love.graphics.print(label, fx + (fw - tw) / 2, fy + (fh - th) / 2)
 end
 
--- A face-down tile rectangle (used for opponents' concealed tiles).
-function M.draw_facedown_box(x: number, y: number, w: number, h: number)
-   love.graphics.setColor(0.30, 0.32, 0.40, 1.0)
-   love.graphics.rectangle("fill", x, y, w, h)
-   love.graphics.setColor(0.50, 0.50, 0.60, 1.0)
-   love.graphics.rectangle("line", x, y, w, h)
+local function draw_back_pattern(fx: number, fy: number, fw: number, fh: number)
+   love.graphics.setColor(0.20, 0.42, 0.30, 1.0)
+   love.graphics.rectangle("fill", fx, fy, fw, fh)
+   -- A simple inset rectangle in a slightly lighter green reads as a
+   -- mahjong tile back without needing an asset.
+   love.graphics.setColor(0.30, 0.55, 0.40, 1.0)
+   local inset = math.min(fw, fh) * 0.18
+   love.graphics.rectangle("fill", fx + inset, fy + inset, fw - 2 * inset, fh - 2 * inset)
+   love.graphics.setColor(0.15, 0.32, 0.22, 1.0)
+   love.graphics.rectangle("line", fx + inset, fy + inset, fw - 2 * inset, fh - 2 * inset)
 end
+
+-- Shadow + thickness band; returns the face rect for body draws.
+local function draw_chrome_pre(x: number, y: number, w: number, h: number, info: OrientationInfo, accent: Color): number, number, number, number
+   draw_shadow(x, y, w, h)
+   return draw_thickness_band(x, y, w, h, info, accent.r * 0.6, accent.g * 0.6, accent.b * 0.6)
+end
+
+local function draw_chrome_post(fx: number, fy: number, fw: number, fh: number, accent: Color)
+   love.graphics.setColor(accent.r, accent.g, accent.b, 1.0)
+   love.graphics.rectangle("line", fx, fy, fw, fh)
+end
+
+function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number,
+                     orientation: SeatOrientation, accent: Color, face: Color)
+   local info = ORIENTATION[orientation]
+   local fx, fy, fw, fh = draw_chrome_pre(x, y, w, h, info, accent)
+   draw_tile_face(fx, fy, fw, fh, face.r, face.g, face.b)
+   local img = assets.tile_symbol(t.kind_id as string)
+   if img ~= nil then
+      draw_symbol(img, fx, fy, fw, fh, info)
+   else
+      draw_text_label(t, fx, fy, fw, fh)
+   end
+   draw_chrome_post(fx, fy, fw, fh, accent)
+end
+
+function M.draw_tile_back(x: number, y: number, w: number, h: number,
+                          orientation: SeatOrientation, accent: Color)
+   local info = ORIENTATION[orientation]
+   local fx, fy, fw, fh = draw_chrome_pre(x, y, w, h, info, accent)
+   draw_back_pattern(fx, fy, fw, fh)
+   draw_chrome_post(fx, fy, fw, fh, accent)
+end
+
+M.CREAM_FACE       = CREAM_FACE
+M.PARCHMENT_ACCENT = PARCHMENT_ACCENT
+M.FACE_DOWN_ACCENT = FACE_DOWN_ACCENT
+M.SET_ACCENT       = SET_ACCENT
 
 return M

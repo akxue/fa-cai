@@ -10,6 +10,7 @@ require("app.scene_stack")
 local scene_stack   = require("app.scene_stack")
 local clickable_mod = require("ui.clickable")
 local button        = require("ui.button")
+local assets        = require("app.assets")
 
 local record RewardState
    score_result: ScoreResult
@@ -48,6 +49,7 @@ local function draw_continue_button(y: number)
 end
 
 local function on_draw()
+   assets.draw_menu_bg()
    state.clickables = {}
    love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
    love.graphics.print("Round 1 Won!", 40, 30)

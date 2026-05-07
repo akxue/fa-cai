@@ -257,3 +257,27 @@ Implications:
 - `AiPersonality` gains `speed_bias`, `value_bias`, `call_appetite`, `kong_appetite`, `target_stickiness`, `safety_bias` fields plumbed through `rank_by_utility` in S07. M1 ships only `NEUTRAL_PERSONALITY`; opponent packages in later milestones become weight tweaks rather than new code paths.
 - The `danger` field is reserved on `CandidateAction` from S07 onward but populated as 0. Defense lands later; the field stays plumbed so downstream code is stable.
 - Future ML / search work uses the `CandidateAction` schema as its observation/action surface. We don't design it specifically for ML; we design it for the inspector and harness, and ML reuses it.
+
+
+## D011: Tile Assets Are Symbol-Only Stamps; Chrome Is Code
+
+Status: accepted
+
+Context:
+- The S11 visual upgrade replaces the ASCII tile labels with rendered mahjong tiles (number characters for wan/circle/bamboo, wind characters, dragon glyphs). The concept image shows tiles with face chrome (cream rounded body), a thickness band on one edge that fakes 3D, drop shadows, and per-seat orientation.
+- Generating one PNG per (kind × chrome variant × orientation × shadow state) explodes the asset count and freezes chrome decisions inside the asset pipeline. A polish change to the tile face colour or bevel would invalidate every asset.
+
+Decision:
+- Tile assets in `assets/symbols/{wan,circle,bamboo,wind,dragon}/` are 128×128 RGBA "ink stamps": just the symbol on a transparent background. They contain no tile chrome, no shadow, no border, no orientation.
+- All chrome — face shape, fill colour, bevel highlight, thickness band, drop shadow, per-seat rotation — is drawn at runtime in `src_tl/ui/tile_render.tl` via `draw_tile(tile, x, y, w, h, opts)`.
+- `app/assets.tl` maps engine `kind_id` → asset path with one entry per kind. Engine names (`tiao_*`, `bing_*`, `fa_cai`, `hong_zhong`, `bai_ban`) are translated to asset names (`bamboo_*`, `circle_*`, `dragon_green/red/white`) at the loader boundary so the engine vocabulary stays clean.
+
+Reason:
+- Iterating chrome is now a code change, not an asset re-export. We can ship a depth tweak in one PR without touching 36 PNGs.
+- Generating new symbol assets (flowers, seasons, season-bonus tiles, future variants) is a one-shot job per kind that does not need to know about table styling.
+- One asset per kind keeps the human review surface small. The `_review/` and `concepts/` subfolders are working scratch and never load at runtime.
+
+Implications:
+- Adding a new tile kind = drop the 128×128 stamp into the right subfolder and add the kind→path mapping in `assets.tl`.
+- Rendering features (hover glow, ting indicator, danger ring, ghost tile for legality preview) are tile_render opts, not new assets.
+- The fallback path in `tile_render.draw_tile` paints a centered text label when `tile_symbol(kind_id)` returns nil, so the table renders sensibly even if an asset is missing for a given kind.

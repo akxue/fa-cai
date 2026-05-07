@@ -7,6 +7,7 @@ local scene_stack       = require("app.scene_stack")
 local table_scene       = require("scenes.table_scene")
 local boon_select_scene = require("scenes.boon_select_scene")
 local clickable_mod     = require("ui.clickable")
+local assets            = require("app.assets")
 
 local record StartState
    selected:   integer
@@ -42,6 +43,7 @@ local function activate(idx: integer)
 end
 
 local function on_draw()
+   assets.draw_menu_bg()
    love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
    love.graphics.print("facai", 40, 30)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)

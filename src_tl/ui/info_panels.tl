@@ -1,6 +1,10 @@
 -- Player-facing info strips: active boons (with counters) and known-wall
--- reveals. Both strips render horizontally so they sit naturally above
--- the player hand row.
+-- reveals. Both cache derived per-frame data (sorted boon list, wall
+-- id→Tile lookup) keyed on the DealState pointer. The engine returns
+-- a new deal table on every action, so pointer identity changes exactly
+-- when state changes; UI-only frames keep the same pointer and hit the
+-- cache. Reset gives a fresh deal pointer, so the cache invalidates
+-- across deals automatically.
 
 require("game.deal_types")
 require("effects.effect_types")
@@ -11,8 +15,6 @@ local panel       = require("ui.panel")
 
 local M = {}
 
--- Sorted keys of a string-keyed table — Lua's pairs() does not guarantee
--- order, and the strip should look stable across frames.
 local function sorted_keys(t: {string:integer}): {string}
    local keys: {string} = {}
    for k, _ in pairs(t) do keys[#keys + 1] = k end
@@ -20,12 +22,14 @@ local function sorted_keys(t: {string:integer}): {string}
    return keys
 end
 
--- Active boons owned by `owner_index`, with any non-zero counters and
--- the used_this_deal flag rendered after the label. Sorted by effect_id
--- for stable order.
-function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
-   panel.draw(x, y, w, h, "Boons")
+local boon_cache_deal: DealState
+local boon_cache_owner: integer = 0
+local boon_cache_list: {ActiveEffectState} = {}
 
+local function owned_boons_sorted(d: DealState, owner_index: integer): {ActiveEffectState}
+   if d == boon_cache_deal and owner_index == boon_cache_owner then
+      return boon_cache_list
+   end
    local owned: {ActiveEffectState} = {}
    for _, st in pairs(d.effect_states) do
       if st.owner_player_index == owner_index then owned[#owned + 1] = st end
@@ -33,7 +37,16 @@ function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: num
    table.sort(owned, function(a: ActiveEffectState, b: ActiveEffectState): boolean
       return a.effect_id < b.effect_id
    end)
+   boon_cache_deal = d
+   boon_cache_owner = owner_index
+   boon_cache_list = owned
+   return owned
+end
 
+function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
+   panel.draw(x, y, w, h, "Boons")
+
+   local owned = owned_boons_sorted(d, owner_index)
    if #owned == 0 then
       love.graphics.setColor(0.55, 0.55, 0.60, 1.0)
       love.graphics.print("(none)", x + 60, y + 4)
@@ -57,10 +70,18 @@ function M.draw_boon_strip(d: DealState, owner_index: integer, x: number, y: num
    end
 end
 
--- Known-wall reveals for `owner_index` rendered as small face-up tile
--- boxes. Tiles are still in d.wall.tiles (the engine clears entries
--- when consumed); we build a one-shot id→Tile map so the per-id lookup
--- is O(known + wall) instead of O(known × wall).
+local wall_cache_deal: DealState
+local wall_cache: {string: Tile} = {}
+
+local function wall_by_id(d: DealState): {string: Tile}
+   if d == wall_cache_deal then return wall_cache end
+   local by_id: {string: Tile} = {}
+   for _, t in ipairs(d.wall.tiles) do by_id[t.tile_id as string] = t end
+   wall_cache_deal = d
+   wall_cache = by_id
+   return by_id
+end
+
 function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
    panel.draw(x, y, w, h, "Known Wall")
 
@@ -71,9 +92,7 @@ function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: num
       return
    end
 
-   local by_id: {string: Tile} = {}
-   for _, t in ipairs(d.wall.tiles) do by_id[t.tile_id as string] = t end
-
+   local by_id = wall_by_id(d)
    local tile_w = 22
    local tile_h = h - 8
    local gap = 3
@@ -81,7 +100,8 @@ function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: num
    for _, id in ipairs(ids) do
       local t = by_id[id as string]
       if t ~= nil then
-         tile_render.draw_tile_box(t, cx, y + 4, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
+         tile_render.draw_tile(t, cx, y + 4, tile_w, tile_h, "south",
+            tile_render.PARCHMENT_ACCENT, tile_render.CREAM_FACE)
       end
       cx = cx + tile_w + gap
    end

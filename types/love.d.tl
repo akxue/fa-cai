@@ -6,6 +6,12 @@ global record Font
    getWrap:   function(Font, text: string, wraplimit: number): (number, {string})
 end
 
+global record Image
+   getWidth:      function(Image): number
+   getHeight:     function(Image): number
+   getDimensions: function(Image): (number, number)
+end
+
 global record love
    load:         function()
    update:       function(dt: number)
@@ -28,6 +34,8 @@ global record love
       newFont:              function(size: number): Font
       setFont:              function(font: Font)
       getFont:              function(): Font
+      newImage:             function(path: string): Image
+      draw:                 function(image: Image, x: number, y: number, r: number, sx: number, sy: number, ox: number, oy: number)
    end
 
    record window
