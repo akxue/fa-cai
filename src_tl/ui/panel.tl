@@ -1,11 +1,8 @@
 -- Panel frame: dark-fill + lighter-border rectangle with an optional
--- title in the top-left corner. The single canonical visual style for
--- bordered widgets across the app.
---
--- M.draw is the default opaque variant. M.draw_alpha takes an explicit
--- fill alpha so callers (notably table_scene's hand strips) can let the
--- background image show through. Border and label stay at full opacity
--- so panel boundaries remain readable on busy backgrounds.
+-- title in the top-left corner. Border and label stay at full opacity
+-- so the frame stays readable when the fill is translucent over a busy
+-- background. `draw_alpha` exposes the fill alpha; `draw` defaults to
+-- opaque.
 
 local M = {}
 

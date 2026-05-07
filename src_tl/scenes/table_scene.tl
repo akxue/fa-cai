@@ -665,6 +665,9 @@ end
 -- ── LÖVE lifecycle ────────────────────────────────────────────────────────
 
 local function on_load()
+   -- LÖVE clears with this colour each frame; only the bg-image's
+   -- letterboxed margin shows through (rare with 1672x941 source).
+   love.graphics.setBackgroundColor(0.13, 0.16, 0.18, 1.0)
    reset(DEFAULT_SEED)
 end
 
@@ -900,24 +903,28 @@ local function toggle_opening_tile_by_id(tile_id: TileId)
    state.selected_opening_tile_ids = out
 end
 
-local function title_with_marker(seat_index: integer): string
-   local d = state.deal
-   local is_current = (d.current_player == seat_index) and (d.phase as string) ~= "deal_over"
+local function seat_title(seat_index: integer): string
    local title = SEAT_NAMES[seat_index]
    local persona = ai_personas.for_seat(seat_index)
    if persona ~= nil and persona.archetype ~= "" then
       title = title .. " · " .. persona.archetype
    end
+   return title
+end
+
+local function title_with_marker(seat_index: integer): string
+   local d = state.deal
+   local is_current = (d.current_player == seat_index) and (d.phase as string) ~= "deal_over"
+   local title = seat_title(seat_index)
    if is_current then title = "▶ " .. title end
    return title
 end
 
--- Opponent hand renderers. Tiles are face-down by default; if the F1
--- inspector is on we reveal them so the developer can see the actual
--- hand. Horizontal variant for top seats (P3), vertical for side seats
--- (P2 right, P4 left).
-
-local function draw_opponent_hand_row(seat_index: integer, x: number, y: number, w: number, h: number)
+-- Opponent hand strip. axis = "row" stacks tiles left-to-right (P3
+-- top); axis = "col" stacks them top-to-bottom (P2/P4 sides). Tiles
+-- are face-down by default; F1 inspector reveals them so the dev can
+-- see the actual hand.
+local function draw_opponent_hand(seat_index: integer, x: number, y: number, w: number, h: number, axis: string)
    local p = state.deal.players[seat_index]
    draw_panel_alpha(x, y, w, h, title_with_marker(seat_index), HAND_PANEL_ALPHA)
    local n = #p.hand.concealed_tiles
@@ -925,30 +932,44 @@ local function draw_opponent_hand_row(seat_index: integer, x: number, y: number,
 
    local pad = 8
    local gap = 2
-   local avail = w - 2 * pad
-   local tile_w = math.min(38, (avail - gap * (n - 1)) / n)
-   if tile_w < 12 then tile_w = 12 end
-   local tile_h = h - 22
-   if tile_h > tile_w * 1.5 then tile_h = math.floor(tile_w * 1.5) end
-   local row_w = tile_w * n + gap * (n - 1)
-   local start_x = x + pad + math.max(0, (avail - row_w) / 2)
-   local row_y = y + 18
-
    local orientation = SEAT_ORIENT[seat_index]
+
+   local tile_w, tile_h, start_x, start_y, dx, dy: number, number, number, number, number, number
+   if axis == "row" then
+      local avail = w - 2 * pad
+      tile_w = math.min(38, (avail - gap * (n - 1)) / n)
+      if tile_w < 12 then tile_w = 12 end
+      tile_h = h - 22
+      if tile_h > tile_w * 1.5 then tile_h = math.floor(tile_w * 1.5) end
+      local row_w = tile_w * n + gap * (n - 1)
+      start_x = x + pad + math.max(0, (avail - row_w) / 2)
+      start_y = y + 18
+      dx = tile_w + gap
+      dy = 0
+   else
+      local avail = h - 22 - pad
+      tile_h = math.min(28, (avail - gap * (n - 1)) / n)
+      if tile_h < 10 then tile_h = 10 end
+      tile_w = w - 14
+      local col_h = tile_h * n + gap * (n - 1)
+      start_x = x + 7
+      start_y = y + 22 + math.max(0, (avail - col_h) / 2)
+      dx = 0
+      dy = tile_h + gap
+   end
+
    if state.inspector_open then
       local idxs = sorted_indices(p.hand.concealed_tiles)
       for slot, src in ipairs(idxs) do
          local t = p.hand.concealed_tiles[src]
-         local tx = start_x + (slot - 1) * (tile_w + gap)
-         tile_render.draw_tile(t, tx, row_y, tile_w, tile_h, {
+         tile_render.draw_tile(t, start_x + (slot - 1) * dx, start_y + (slot - 1) * dy, tile_w, tile_h, {
             orientation = orientation, face_down = false,
             accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
          })
       end
    else
       for i = 1, n do
-         local tx = start_x + (i - 1) * (tile_w + gap)
-         tile_render.draw_tile(nil, tx, row_y, tile_w, tile_h, {
+         tile_render.draw_tile(nil, start_x + (i - 1) * dx, start_y + (i - 1) * dy, tile_w, tile_h, {
             orientation = orientation, face_down = true,
             accent_r = 0.30, accent_g = 0.32, accent_b = 0.40,
          })
@@ -956,93 +977,48 @@ local function draw_opponent_hand_row(seat_index: integer, x: number, y: number,
    end
 end
 
-local function draw_opponent_hand_col(seat_index: integer, x: number, y: number, w: number, h: number)
+-- Open-sets strip beside each seat. Sets are flow-laid in groups with
+-- a wider gap between sets than within. Col mode bounds-checks against
+-- strip height so a player with many called groups doesn't overflow.
+local function draw_seat_open_sets(seat_index: integer, x: number, y: number, w: number, h: number, axis: string)
+   draw_panel_alpha(x, y, w, h, "", HAND_PANEL_ALPHA)
    local p = state.deal.players[seat_index]
-   draw_panel_alpha(x, y, w, h, title_with_marker(seat_index), HAND_PANEL_ALPHA)
-   local n = #p.hand.concealed_tiles
-   if n == 0 then return end
-
+   if #p.hand.sets == 0 then return end
+   local orientation = SEAT_ORIENT[seat_index]
    local pad = 8
    local gap = 2
-   local avail = h - 22 - pad
-   local tile_h = math.min(28, (avail - gap * (n - 1)) / n)
-   if tile_h < 10 then tile_h = 10 end
-   local tile_w = w - 14
-   local col_h = tile_h * n + gap * (n - 1)
-   local start_y = y + 22 + math.max(0, (avail - col_h) / 2)
 
-   local orientation = SEAT_ORIENT[seat_index]
-   if state.inspector_open then
-      local idxs = sorted_indices(p.hand.concealed_tiles)
-      for slot, src in ipairs(idxs) do
-         local t = p.hand.concealed_tiles[src]
-         local ty = start_y + (slot - 1) * (tile_h + gap)
-         tile_render.draw_tile(t, x + 7, ty, tile_w, tile_h, {
-            orientation = orientation, face_down = false,
-            accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
-         })
-      end
+   local tile_w, tile_h, set_gap, dx, dy: number, number, number, number, number
+   local cx, cy: number, number
+   if axis == "row" then
+      tile_w = 26
+      tile_h = h - 14
+      set_gap = 10
+      cx = x + pad
+      cy = y + 8
+      dx = tile_w + gap
+      dy = 0
    else
-      for i = 1, n do
-         local ty = start_y + (i - 1) * (tile_h + gap)
-         tile_render.draw_tile(nil, x + 7, ty, tile_w, tile_h, {
-            orientation = orientation, face_down = true,
-            accent_r = 0.30, accent_g = 0.32, accent_b = 0.40,
-         })
-      end
+      tile_w = w - 14
+      tile_h = 26
+      set_gap = 8
+      cx = x + 7
+      cy = y + 8
+      dx = 0
+      dy = tile_h + gap
    end
-end
 
--- Open-sets strips (formerly "public" strips). Discards live in the
--- central pile now; these only show open sets next to each player so
--- claimed groupings are visible adjacent to the seat that owns them.
-
-local function draw_seat_open_sets_row(seat_index: integer, x: number, y: number, w: number, h: number)
-   draw_panel_alpha(x, y, w, h, "", HAND_PANEL_ALPHA)
-   local p = state.deal.players[seat_index]
-   if #p.hand.sets == 0 then return end
-   local orientation = SEAT_ORIENT[seat_index]
-   local pad = 8
-   local gap = 2
-   local set_gap = 10
-   local tile_w = 26
-   local tile_h = h - 14
-   local cx = x + pad
-   local row_y = y + 8
    for _, s in ipairs(p.hand.sets) do
       for _, t in ipairs(s.tiles) do
-         tile_render.draw_tile(t, cx, row_y, tile_w, tile_h, {
-            orientation = orientation, face_down = false,
-            accent_r = 0.40, accent_g = 0.55, accent_b = 0.45,
-         })
-         cx = cx + tile_w + gap
-      end
-      cx = cx + set_gap
-   end
-end
-
-local function draw_seat_open_sets_col(seat_index: integer, x: number, y: number, w: number, h: number)
-   draw_panel_alpha(x, y, w, h, "", HAND_PANEL_ALPHA)
-   local p = state.deal.players[seat_index]
-   if #p.hand.sets == 0 then return end
-   local orientation = SEAT_ORIENT[seat_index]
-   local pad = 8
-   local gap = 2
-   local set_gap = 8
-   local tile_w = w - 14
-   local tile_h = 26
-   local cx = x + 7
-   local cy = y + 8
-   for _, s in ipairs(p.hand.sets) do
-      for _, t in ipairs(s.tiles) do
-         if cy + tile_h > y + h - pad then return end
+         if axis == "col" and cy + tile_h > y + h - pad then return end
          tile_render.draw_tile(t, cx, cy, tile_w, tile_h, {
             orientation = orientation, face_down = false,
             accent_r = 0.40, accent_g = 0.55, accent_b = 0.45,
          })
-         cy = cy + tile_h + gap
+         cx = cx + dx
+         cy = cy + dy
       end
-      cy = cy + set_gap
+      if axis == "row" then cx = cx + set_gap else cy = cy + set_gap end
    end
 end
 
@@ -1170,11 +1146,7 @@ local function draw_discards_modal()
    for slot, seat in ipairs(SEAT_ORDER) do
       local row_y = content_y + (slot - 1) * row_h
       local p = state.deal.players[seat]
-      local persona = ai_personas.for_seat(seat)
-      local title = SEAT_NAMES[seat]
-      if persona ~= nil and persona.archetype ~= "" then
-         title = title .. " · " .. persona.archetype
-      end
+      local title = seat_title(seat)
       local count_label = "  (" .. tostring(#p.hand.discards) .. ")"
       local color = SEAT_COLORS[seat]
       love.graphics.setColor(color.r, color.g, color.b, 1.0)
@@ -1565,10 +1537,6 @@ local function on_draw()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
 
-   -- Background image as cover-fit. setBackgroundColor paints whatever
-   -- the cover-fit doesn't reach (rare with a 1672x941 source) so the
-   -- window never paints fuchsia at the edges.
-   love.graphics.setBackgroundColor(0.13, 0.16, 0.18, 1.0)
    assets.draw_bg_cover()
 
    -- Keep the cursor pointing at a real tile; this also runs in update
@@ -1588,9 +1556,6 @@ local function on_draw()
    local right_w = show_debug_panel and 360 or 0
    local right_x = sw - right_w - margin
 
-   -- Corner HUD (run mode) or full-width debug status bar (debug mode).
-   -- The HUD stacks Round/Lives/Wall pills in the top-left; the debug
-   -- bar shows seed/phase/ticks across the top.
    if state.mode == "debug" then
       draw_status_bar(margin, margin, sw - 2 * margin)
    else
@@ -1618,7 +1583,7 @@ local function on_draw()
 
    -- P3 hand row (top, full table_w).
    local p3_hand_y   = table_y
-   draw_opponent_hand_row(3, table_x, p3_hand_y, table_w, edge_short)
+   draw_opponent_hand(3, table_x, p3_hand_y, table_w, edge_short, "row")
 
    -- P1 hand row (bottom, full table_w).
    local p1_hand_y   = table_y + table_h - p1_hand_h
@@ -1636,14 +1601,14 @@ local function on_draw()
    -- P4 (left): hand col + open-sets col, both spanning the full side_h.
    local p4_hand_x   = table_x
    local p4_public_x = p4_hand_x + edge_short + 4
-   draw_opponent_hand_col(4, p4_hand_x, side_y, edge_short, side_h)
-   draw_seat_open_sets_col(4, p4_public_x, side_y, public_short, side_h)
+   draw_opponent_hand(4, p4_hand_x, side_y, edge_short, side_h, "col")
+   draw_seat_open_sets(4, p4_public_x, side_y, public_short, side_h, "col")
 
    -- P2 (right): hand col + open-sets col, both spanning the full side_h.
    local p2_hand_x   = table_x + table_w - edge_short
    local p2_public_x = p2_hand_x - public_short - 4
-   draw_opponent_hand_col(2, p2_hand_x, side_y, edge_short, side_h)
-   draw_seat_open_sets_col(2, p2_public_x, side_y, public_short, side_h)
+   draw_opponent_hand(2, p2_hand_x, side_y, edge_short, side_h, "col")
+   draw_seat_open_sets(2, p2_public_x, side_y, public_short, side_h, "col")
 
    -- Centre column inside the side strips. Stacks vertically:
    --   info panel (top)
@@ -1663,10 +1628,10 @@ local function on_draw()
    draw_center_info(center_x, center_y, center_w, info_h)
 
    local p3_sets_y = center_y + info_h + 4
-   draw_seat_open_sets_row(3, center_x, p3_sets_y, center_w, public_short)
+   draw_seat_open_sets(3, center_x, p3_sets_y, center_w, public_short, "row")
 
    local p1_sets_y = center_y + side_h - public_short
-   draw_seat_open_sets_row(1, center_x, p1_sets_y, center_w, p1_public_h)
+   draw_seat_open_sets(1, center_x, p1_sets_y, center_w, p1_public_h, "row")
 
    local pile_y = p3_sets_y + public_short + 4
    local pile_h = p1_sets_y - 4 - pile_y

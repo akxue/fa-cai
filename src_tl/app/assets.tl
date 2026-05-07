@@ -1,21 +1,17 @@
--- Asset loader. LÖVE images are loaded once at startup and cached here
--- so the render path can call assets.bg_table() without paying I/O cost
--- per frame. Paths resolve relative to the LÖVE source root, which is
--- the project root (see main.lua at the repository root and `make run`).
+-- Image cache + tile-symbol lookup. Paths resolve relative to the
+-- LÖVE source root (project root; see main.lua and `make run`).
 --
--- Tile symbol images are 128x128 ink-on-transparent stamps (numerals,
--- wind characters, dragons). The tile chrome — face shape, drop shadow,
--- thickness band, per-seat orientation — is drawn in code by ui/tile_render.tl.
--- See docs/DECISIONS.md for the rationale (one symbol asset = N tile
--- variants without re-rendering when chrome style changes).
+-- Tile symbol images are 128x128 ink-on-transparent stamps. Tile
+-- chrome (face shape, shadow, thickness band, orientation) is drawn
+-- in code by ui/tile_render.tl — see docs/DECISIONS.md D011.
 
 local M = {}
 
 local images: {string: Image} = {}
+local tile_images: {string: Image} = {}
 
--- Mapping engine kind_id → asset path. Engine uses "tiao"/"bing", asset
--- folders use "bamboo"/"circle"; dragons map by colour. Unmapped kinds
--- (e.g. flowers, seasons — none in M1) fall back to text in tile_render.
+-- Engine kind_id → asset path. Engine vocabulary ("tiao"/"bing") and
+-- asset folder names ("bamboo"/"circle") differ; dragons map by colour.
 local TILE_SYMBOL_PATH: {string: string} = {}
 do
    for r = 1, 9 do
@@ -35,7 +31,7 @@ end
 function M.load_all()
    images.bg_table = love.graphics.newImage("assets/backgrounds/garden_table_concept_match_v1.png")
    for kind_id, path in pairs(TILE_SYMBOL_PATH) do
-      images["tile_" .. kind_id] = love.graphics.newImage(path)
+      tile_images[kind_id] = love.graphics.newImage(path)
    end
 end
 
@@ -43,37 +39,56 @@ function M.bg_table(): Image
    return images.bg_table
 end
 
--- Returns nil if no symbol asset exists for this kind_id (caller should
--- fall back to a text label).
+-- Returns nil if no symbol asset exists for this kind_id; caller falls
+-- back to a text label.
 function M.tile_symbol(kind_id: string): Image
-   return images["tile_" .. kind_id]
+   return tile_images[kind_id]
 end
 
--- Cover-fit the background image to the current window. The image's
--- aspect ratio (1672x941, ~1.78:1) doesn't match the default window
--- (1280x800, 1.6:1), so this scales by max(sx, sy) and crops the
--- overflow symmetrically.
+-- Cover-fit cache. Window size rarely changes, image is immutable.
+local bg_iw: number = 0
+local bg_ih: number = 0
+local bg_cache_sw: number = -1
+local bg_cache_sh: number = -1
+local bg_scale: number = 1.0
+local bg_off_x: number = 0
+local bg_off_y: number = 0
+
+local function update_bg_cover_cache(sw: number, sh: number)
+   if sw == bg_cache_sw and sh == bg_cache_sh then return end
+   if bg_iw == 0 then
+      bg_iw = images.bg_table:getWidth()
+      bg_ih = images.bg_table:getHeight()
+   end
+   bg_scale = math.max(sw / bg_iw, sh / bg_ih)
+   bg_off_x = (sw - bg_iw * bg_scale) / 2
+   bg_off_y = (sh - bg_ih * bg_scale) / 2
+   bg_cache_sw = sw
+   bg_cache_sh = sh
+end
+
 function M.draw_bg_cover()
    local bg = images.bg_table
    if bg == nil then return end
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
-   local iw = bg:getWidth()
-   local ih = bg:getHeight()
-   local scale = math.max(sw / iw, sh / ih)
-   local off_x = (sw - iw * scale) / 2
-   local off_y = (sh - ih * scale) / 2
+   update_bg_cover_cache(sw, sh)
    love.graphics.setColor(1, 1, 1, 1)
-   love.graphics.draw(bg, off_x, off_y, 0, scale, scale, 0, 0)
+   love.graphics.draw(bg, bg_off_x, bg_off_y, 0, bg_scale, bg_scale, 0, 0)
 end
 
--- draw_bg_cover then a dark semi-transparent overlay. Non-table scenes
--- (start, boon select, reward, result) use this so their UI text reads
--- clearly against the busy garden background.
+-- Cover-fit + dark overlay. Used by non-table scenes so their UI text
+-- reads against the busy garden background.
+local MENU_BG_ALPHA <const>: number = 0.55
+
 function M.draw_bg_dimmed(overlay_alpha: number)
    M.draw_bg_cover()
    love.graphics.setColor(0.05, 0.06, 0.08, overlay_alpha)
    love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
+end
+
+function M.draw_menu_bg()
+   M.draw_bg_dimmed(MENU_BG_ALPHA)
 end
 
 return M

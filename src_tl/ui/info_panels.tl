@@ -81,7 +81,10 @@ function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: num
    for _, id in ipairs(ids) do
       local t = by_id[id as string]
       if t ~= nil then
-         tile_render.draw_tile_box(t, cx, y + 4, tile_w, tile_h, 0.92, 0.90, 0.82, 0.55, 0.50, 0.40)
+         tile_render.draw_tile(t, cx, y + 4, tile_w, tile_h, {
+            orientation = "south", face_down = false,
+            accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
+         })
       end
       cx = cx + tile_w + gap
    end

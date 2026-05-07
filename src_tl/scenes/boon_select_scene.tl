@@ -52,7 +52,7 @@ local function start_run_with(boon_id: string)
 end
 
 local function on_draw()
-   assets.draw_bg_dimmed(0.55)
+   assets.draw_menu_bg()
    love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
    love.graphics.print("Choose a starter boon", 40, 30)
    love.graphics.setColor(0.65, 0.65, 0.70, 1.0)

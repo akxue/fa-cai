@@ -79,22 +79,14 @@ end
 
 -- ── Drawing helpers (require love.graphics) ──────────────────────────────
 
--- Tile rendering is layered: drop shadow → thickness band on the
--- "table-side" edge → tile face (cream rounded-rect with subtle bevel)
--- → symbol asset or text fallback. The thickness band fakes a 3D side
--- view at zero geometric cost — the tile reads as a slab sitting on the
+-- Layered render: shadow → thickness band on the table-side edge →
+-- face (cream rect + bevel) → symbol image (rotated to the seat) or
+-- text fallback. The band fakes 3D so the tile reads as a slab on the
 -- felt rather than a flat sticker.
 --
--- `orientation` controls which edge gets the thickness band AND, for
--- face-up tiles, the rotation of the symbol so it reads from that
--- seat's perspective:
---   "south" — player seat (default, no rotation, band on bottom)
---   "north" — top opponent (180°, band on top)
---   "east"  — right opponent (-90°, band on right)
---   "west"  — left opponent (+90°, band on left)
---
--- Face-down backs use a green back pattern; orientation only affects
--- the thickness band placement (back is symmetric).
+-- orientation: south=player, north=top opponent (180°), east=right
+-- opponent (-90°), west=left opponent (+90°). For face-down tiles
+-- only the band placement is affected; the back is symmetric.
 
 global record TileRenderOpts
    orientation: string         -- "south" | "north" | "east" | "west"; defaults to "south"
@@ -110,24 +102,39 @@ end
 local THICK <const>: number = 4   -- thickness-band depth in px
 local SHADOW_OFF <const>: number = 3
 
+-- One lookup per draw_tile call replaces three separate string-compare
+-- chains in band/rotation/symbol helpers. Called ~150 times/frame.
+local record OrientationInfo
+   rotation:         number
+   band_edge:        string   -- "s" | "n" | "e" | "w"
+   sym_axes_swapped: boolean  -- true for east/west (90° rotation)
+end
+
+local ORIENTATION: {string: OrientationInfo} = {
+   south = { rotation = 0,            band_edge = "s", sym_axes_swapped = false },
+   north = { rotation = math.pi,      band_edge = "n", sym_axes_swapped = false },
+   east  = { rotation = -math.pi / 2, band_edge = "e", sym_axes_swapped = true  },
+   west  = { rotation =  math.pi / 2, band_edge = "w", sym_axes_swapped = true  },
+}
+
 local function draw_shadow(x: number, y: number, w: number, h: number)
    love.graphics.setColor(0.0, 0.0, 0.0, 0.30)
    love.graphics.rectangle("fill", x + SHADOW_OFF, y + SHADOW_OFF, w, h)
 end
 
--- Draw the thickness band on whichever edge is "down" relative to
--- orientation. Returns the inset face rect (x, y, w, h) where the
--- main tile face should be drawn.
-local function draw_thickness_band(x: number, y: number, w: number, h: number, orientation: string,
+-- Draw the thickness band on whichever edge is "down" for the seat.
+-- Returns the inset face rect for the main face draw.
+local function draw_thickness_band(x: number, y: number, w: number, h: number, info: OrientationInfo,
                                    r: number, g: number, b: number): number, number, number, number
    love.graphics.setColor(r, g, b, 1.0)
-   if orientation == "north" then
+   local edge = info.band_edge
+   if edge == "n" then
       love.graphics.rectangle("fill", x, y, w, THICK)
       return x, y + THICK, w, h - THICK
-   elseif orientation == "east" then
+   elseif edge == "e" then
       love.graphics.rectangle("fill", x + w - THICK, y, THICK, h)
       return x, y, w - THICK, h
-   elseif orientation == "west" then
+   elseif edge == "w" then
       love.graphics.rectangle("fill", x, y, THICK, h)
       return x + THICK, y, w - THICK, h
    else
@@ -136,37 +143,26 @@ local function draw_thickness_band(x: number, y: number, w: number, h: number, o
    end
 end
 
-local function rotation_for(orientation: string): number
-   if orientation == "north" then return math.pi end
-   if orientation == "east"  then return -math.pi / 2 end
-   if orientation == "west"  then return  math.pi / 2 end
-   return 0
-end
-
 local function draw_tile_face(fx: number, fy: number, fw: number, fh: number, fill_r: number, fill_g: number, fill_b: number)
    love.graphics.setColor(fill_r, fill_g, fill_b, 1.0)
    love.graphics.rectangle("fill", fx, fy, fw, fh)
-   -- Top-left highlight: a thin bright stripe sells the bevel.
    love.graphics.setColor(1.0, 1.0, 1.0, 0.35)
    love.graphics.rectangle("fill", fx, fy, fw, 1)
    love.graphics.rectangle("fill", fx, fy, 1, fh)
 end
 
--- Composite the symbol image at the centre of the face, rotated for
--- orientation. Image is 128x128; inset 10% so the symbol breathes.
-local function draw_symbol(img: Image, fx: number, fy: number, fw: number, fh: number, orientation: string)
+-- Composite the symbol image at the centre of the face. Symbol is
+-- 128×128 and inset 12% so it breathes; for 90/270° rotations the
+-- target dimensions are swapped so the symbol still fills the face.
+local function draw_symbol(img: Image, fx: number, fy: number, fw: number, fh: number, info: OrientationInfo)
    local pad_w = fw * 0.12
    local pad_h = fh * 0.12
    local target_w = fw - pad_w * 2
    local target_h = fh - pad_h * 2
    local iw = img:getWidth()
    local ih = img:getHeight()
-   -- Symbol is rotated around its own centre; choose target dimensions
-   -- against the tile face's longer axis when rotating 90/270 so the
-   -- symbol fills the face the same regardless of orientation.
-   local rot = rotation_for(orientation)
    local sx, sy: number, number
-   if orientation == "east" or orientation == "west" then
+   if info.sym_axes_swapped then
       sx = target_h / iw
       sy = target_w / ih
    else
@@ -174,7 +170,7 @@ local function draw_symbol(img: Image, fx: number, fy: number, fw: number, fh: n
       sy = target_h / ih
    end
    love.graphics.setColor(1, 1, 1, 1)
-   love.graphics.draw(img, fx + fw / 2, fy + fh / 2, rot, sx, sy, iw / 2, ih / 2)
+   love.graphics.draw(img, fx + fw / 2, fy + fh / 2, info.rotation, sx, sy, iw / 2, ih / 2)
 end
 
 local function draw_text_label(t: Tile, fx: number, fy: number, fw: number, fh: number)
@@ -213,12 +209,13 @@ function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number, opts: 
    local face_r = (opts ~= nil and opts.face_r ~= nil) and opts.face_r or 0.96
    local face_g = (opts ~= nil and opts.face_g ~= nil) and opts.face_g or 0.94
    local face_b = (opts ~= nil and opts.face_b ~= nil) and opts.face_b or 0.86
+   local info = ORIENTATION[orientation] or ORIENTATION.south
 
    draw_shadow(x, y, w, h)
 
-   -- The thickness band sits a touch darker than the accent so it reads
-   -- as the tile's "side" rather than a frame.
-   local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, orientation,
+   -- Band sits a touch darker than the accent so it reads as the
+   -- tile's "side" rather than a frame.
+   local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, info,
       accent_r * 0.6, accent_g * 0.6, accent_b * 0.6)
 
    if face_down then
@@ -227,35 +224,14 @@ function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number, opts: 
       draw_tile_face(fx, fy, fw, fh, face_r, face_g, face_b)
       local img = (t ~= nil) and assets.tile_symbol(t.kind_id as string) or nil
       if img ~= nil then
-         draw_symbol(img, fx, fy, fw, fh, orientation)
+         draw_symbol(img, fx, fy, fw, fh, info)
       else
          draw_text_label(t, fx, fy, fw, fh)
       end
    end
 
-   -- Accent border around the face (not the band) so per-seat tinting
-   -- still works for discards.
    love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
    love.graphics.rectangle("line", fx, fy, fw, fh)
-end
-
--- Back-compat shim. Older call sites pass colour params positionally;
--- map them to the new opts record. Defaults to player ("south")
--- orientation since most existing callers were rendering player-side.
-function M.draw_tile_box(t: Tile, x: number, y: number, w: number, h: number, _fill_r: number, _fill_g: number, _fill_b: number, border_r: number, border_g: number, border_b: number)
-   M.draw_tile(t, x, y, w, h, {
-      orientation = "south",
-      face_down = false,
-      accent_r = border_r, accent_g = border_g, accent_b = border_b,
-   })
-end
-
-function M.draw_facedown_box(x: number, y: number, w: number, h: number)
-   M.draw_tile(nil, x, y, w, h, {
-      orientation = "south",
-      face_down = true,
-      accent_r = DEFAULT_ACCENT_R, accent_g = DEFAULT_ACCENT_G, accent_b = DEFAULT_ACCENT_B,
-   })
 end
 
 return M

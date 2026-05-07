@@ -49,7 +49,7 @@ local function draw_continue_button(y: number)
 end
 
 local function on_draw()
-   assets.draw_bg_dimmed(0.55)
+   assets.draw_menu_bg()
    state.clickables = {}
    love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
    love.graphics.print("Round 1 Won!", 40, 30)

@@ -80,6 +80,8 @@ function M.draw_horizontal(opts: {ActionPromptOption}, x: number, y: number, w: 
    local btn_h = h
    local total_w = btn_w * n + BTN_GAP * (n - 1)
    local start_x = x + (w - total_w) / 2
+   local font = love.graphics.getFont()
+   local font_h = font:getHeight()
 
    for i, opt in ipairs(opts) do
       local bx = start_x + (i - 1) * (btn_w + BTN_GAP)
@@ -90,7 +92,6 @@ function M.draw_horizontal(opts: {ActionPromptOption}, x: number, y: number, w: 
       love.graphics.setColor(0.55, 0.60, 0.70, 1.0)
       love.graphics.rectangle("line", bx, by, btn_w, btn_h)
 
-      local font = love.graphics.getFont()
       local keystr = "[" .. opt.key:upper() .. "]"
       local kw = font:getWidth(keystr)
       love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
@@ -98,7 +99,7 @@ function M.draw_horizontal(opts: {ActionPromptOption}, x: number, y: number, w: 
 
       local lw = font:getWidth(opt.label)
       love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
-      love.graphics.print(opt.label, bx + (btn_w - lw) / 2, by + btn_h - font:getHeight() - 6)
+      love.graphics.print(opt.label, bx + (btn_w - lw) / 2, by + btn_h - font_h - 6)
 
       rects[i] = { x = bx, y = by, w = btn_w, h = btn_h }
    end

@@ -47,7 +47,7 @@ local function draw_button(label: string, x: number, y: number, w: number, h: nu
 end
 
 local function on_draw()
-   assets.draw_bg_dimmed(0.55)
+   assets.draw_menu_bg()
    state.clickables = {}
    if state.run_state == nil then
       love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
