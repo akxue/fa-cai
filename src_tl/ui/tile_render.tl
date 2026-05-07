@@ -84,17 +84,23 @@ end
 -- text fallback. The band fakes 3D so the tile reads as a slab on the
 -- felt rather than a flat sticker.
 --
--- orientation: south=player, north=top opponent (180°), east=right
--- opponent (-90°), west=left opponent (+90°). For face-down tiles
--- only the band placement is affected; the back is symmetric.
+-- Orientation: south=player, north=top opponent (180°), east=right
+-- (-90°), west=left (+90°). For face-down backs only the band placement
+-- matters; the back pattern is rotationally symmetric.
+
+global enum SeatOrientation
+   "south"
+   "north"
+   "east"
+   "west"
+end
 
 global record TileRenderOpts
-   orientation: string         -- "south" | "north" | "east" | "west"; defaults to "south"
-   face_down:   boolean        -- true → render the green back instead of symbol
-   accent_r:    number         -- border tint (defaults to a warm parchment edge)
+   orientation: SeatOrientation
+   accent_r:    number
    accent_g:    number
    accent_b:    number
-   face_r:      number         -- face fill (defaults to cream parchment)
+   face_r:      number
    face_g:      number
    face_b:      number
 end
@@ -102,15 +108,15 @@ end
 local THICK <const>: number = 4   -- thickness-band depth in px
 local SHADOW_OFF <const>: number = 3
 
--- One lookup per draw_tile call replaces three separate string-compare
--- chains in band/rotation/symbol helpers. Called ~150 times/frame.
+-- One lookup per draw_tile call replaces string-compare chains in
+-- band/rotation/symbol helpers. Called ~150 times/frame.
 local record OrientationInfo
    rotation:         number
    band_edge:        string   -- "s" | "n" | "e" | "w"
-   sym_axes_swapped: boolean  -- true for east/west (90° rotation)
+   sym_axes_swapped: boolean  -- east/west (90° rotation)
 end
 
-local ORIENTATION: {string: OrientationInfo} = {
+local ORIENTATION: {SeatOrientation: OrientationInfo} = {
    south = { rotation = 0,            band_edge = "s", sym_axes_swapped = false },
    north = { rotation = math.pi,      band_edge = "n", sym_axes_swapped = false },
    east  = { rotation = -math.pi / 2, band_edge = "e", sym_axes_swapped = true  },
@@ -194,42 +200,54 @@ local function draw_back_pattern(fx: number, fy: number, fw: number, fh: number)
    love.graphics.rectangle("line", fx + inset, fy + inset, fw - 2 * inset, fh - 2 * inset)
 end
 
--- Default opts when caller passes nil.
-local DEFAULT_ORIENTATION <const>: string = "south"
+local DEFAULT_ORIENTATION <const>: SeatOrientation = "south"
 local DEFAULT_ACCENT_R <const>: number = 0.55
 local DEFAULT_ACCENT_G <const>: number = 0.50
 local DEFAULT_ACCENT_B <const>: number = 0.40
 
+local function resolve_opts(opts: TileRenderOpts): SeatOrientation, number, number, number, number, number, number
+   if opts == nil then
+      return DEFAULT_ORIENTATION, DEFAULT_ACCENT_R, DEFAULT_ACCENT_G, DEFAULT_ACCENT_B, 0.96, 0.94, 0.86
+   end
+   local orientation = opts.orientation or DEFAULT_ORIENTATION
+   return orientation,
+      opts.accent_r or DEFAULT_ACCENT_R,
+      opts.accent_g or DEFAULT_ACCENT_G,
+      opts.accent_b or DEFAULT_ACCENT_B,
+      opts.face_r or 0.96,
+      opts.face_g or 0.94,
+      opts.face_b or 0.86
+end
+
 function M.draw_tile(t: Tile, x: number, y: number, w: number, h: number, opts: TileRenderOpts)
-   local orientation = (opts ~= nil and opts.orientation ~= nil and opts.orientation ~= "") and opts.orientation or DEFAULT_ORIENTATION
-   local face_down = opts ~= nil and opts.face_down or false
-   local accent_r = (opts ~= nil and opts.accent_r ~= nil) and opts.accent_r or DEFAULT_ACCENT_R
-   local accent_g = (opts ~= nil and opts.accent_g ~= nil) and opts.accent_g or DEFAULT_ACCENT_G
-   local accent_b = (opts ~= nil and opts.accent_b ~= nil) and opts.accent_b or DEFAULT_ACCENT_B
-   local face_r = (opts ~= nil and opts.face_r ~= nil) and opts.face_r or 0.96
-   local face_g = (opts ~= nil and opts.face_g ~= nil) and opts.face_g or 0.94
-   local face_b = (opts ~= nil and opts.face_b ~= nil) and opts.face_b or 0.86
+   local orientation, accent_r, accent_g, accent_b, face_r, face_g, face_b = resolve_opts(opts)
    local info = ORIENTATION[orientation] or ORIENTATION.south
 
    draw_shadow(x, y, w, h)
-
-   -- Band sits a touch darker than the accent so it reads as the
-   -- tile's "side" rather than a frame.
    local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, info,
       accent_r * 0.6, accent_g * 0.6, accent_b * 0.6)
-
-   if face_down then
-      draw_back_pattern(fx, fy, fw, fh)
+   draw_tile_face(fx, fy, fw, fh, face_r, face_g, face_b)
+   local img = assets.tile_symbol(t.kind_id as string)
+   if img ~= nil then
+      draw_symbol(img, fx, fy, fw, fh, info)
    else
-      draw_tile_face(fx, fy, fw, fh, face_r, face_g, face_b)
-      local img = (t ~= nil) and assets.tile_symbol(t.kind_id as string) or nil
-      if img ~= nil then
-         draw_symbol(img, fx, fy, fw, fh, info)
-      else
-         draw_text_label(t, fx, fy, fw, fh)
-      end
+      draw_text_label(t, fx, fy, fw, fh)
    end
+   love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
+   love.graphics.rectangle("line", fx, fy, fw, fh)
+end
 
+-- Face-down tile back. Used for opponents' concealed tiles. Tile
+-- identity isn't displayed, so no Tile arg; orientation only affects
+-- the thickness band placement (the back pattern is symmetric).
+function M.draw_tile_back(x: number, y: number, w: number, h: number, opts: TileRenderOpts)
+   local orientation, accent_r, accent_g, accent_b = resolve_opts(opts)
+   local info = ORIENTATION[orientation] or ORIENTATION.south
+
+   draw_shadow(x, y, w, h)
+   local fx, fy, fw, fh = draw_thickness_band(x, y, w, h, info,
+      accent_r * 0.6, accent_g * 0.6, accent_b * 0.6)
+   draw_back_pattern(fx, fy, fw, fh)
    love.graphics.setColor(accent_r, accent_g, accent_b, 1.0)
    love.graphics.rectangle("line", fx, fy, fw, fh)
 end

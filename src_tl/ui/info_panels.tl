@@ -82,7 +82,7 @@ function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: num
       local t = by_id[id as string]
       if t ~= nil then
          tile_render.draw_tile(t, cx, y + 4, tile_w, tile_h, {
-            orientation = "south", face_down = false,
+            orientation = "south",
             accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
          })
       end

@@ -804,11 +804,10 @@ end
 
 local SEAT_NAMES: {string} = { "East (P1)", "South (P2)", "West (P3)", "North (P4)" }
 
--- Per-seat tile orientation. Player seat is "south" (no rotation, thickness
--- band on bottom). The other three sit at the table edges, which is what
--- gives the table its perspective — a tile seen from the north opponent's
--- seat has its "back" thickness on the top edge from the player's POV.
-local SEAT_ORIENT: {string} = { "south", "east", "north", "west" }
+-- Per-seat tile orientation. Player (seat 1) is "south" (no rotation,
+-- band on bottom); the other three sit at the table edges so their
+-- tiles read as 3D from that seat's perspective.
+local SEAT_ORIENT: {SeatOrientation} = { "south", "east", "north", "west" }
 
 -- Per-seat discard color (used to tint each tile's border in the center
 -- discard pile so players can see at a glance who threw what).
@@ -963,14 +962,14 @@ local function draw_opponent_hand(seat_index: integer, x: number, y: number, w: 
       for slot, src in ipairs(idxs) do
          local t = p.hand.concealed_tiles[src]
          tile_render.draw_tile(t, start_x + (slot - 1) * dx, start_y + (slot - 1) * dy, tile_w, tile_h, {
-            orientation = orientation, face_down = false,
+            orientation = orientation,
             accent_r = 0.55, accent_g = 0.50, accent_b = 0.40,
          })
       end
    else
       for i = 1, n do
-         tile_render.draw_tile(nil, start_x + (i - 1) * dx, start_y + (i - 1) * dy, tile_w, tile_h, {
-            orientation = orientation, face_down = true,
+         tile_render.draw_tile_back(start_x + (i - 1) * dx, start_y + (i - 1) * dy, tile_w, tile_h, {
+            orientation = orientation,
             accent_r = 0.30, accent_g = 0.32, accent_b = 0.40,
          })
       end
@@ -1012,7 +1011,7 @@ local function draw_seat_open_sets(seat_index: integer, x: number, y: number, w:
       for _, t in ipairs(s.tiles) do
          if axis == "col" and cy + tile_h > y + h - pad then return end
          tile_render.draw_tile(t, cx, cy, tile_w, tile_h, {
-            orientation = orientation, face_down = false,
+            orientation = orientation,
             accent_r = 0.40, accent_g = 0.55, accent_b = 0.45,
          })
          cx = cx + dx
@@ -1022,23 +1021,37 @@ local function draw_seat_open_sets(seat_index: integer, x: number, y: number, w:
    end
 end
 
--- Per-seat discard strip. Each player's discards lay out in a clean
--- grid that grows from their edge of the center toward the compass
--- medallion (so newer tiles end up nearer the middle). Replaces the
--- earlier organic-pile look — see the inspiration mock for the four
--- rivers-around-compass arrangement.
---
--- orientation:
---   "row_top"    — tiles flow left-to-right, rows stack DOWN from y
---   "row_bottom" — tiles flow left-to-right, rows stack UP from y+h
---   "col_left"   — tiles flow top-to-bottom, cols stack RIGHT from x
---   "col_right"  — tiles flow top-to-bottom, cols stack LEFT from x+w
--- Per-seat discard strip. Tiles are sized to read at glance — about
--- 75% of the player hand size — so the player can scan recent
--- discards without leaning in. Capacity is bounded; when total
--- discards exceed what fits, the strip shows the LATEST N tiles and
--- a "+N" hint where the older ones got clipped. The full pile is
--- viewable via the discards modal (D key).
+-- "+N" overflow badge for clipped strips. Anchored at the "newer"
+-- outside corner so it doesn't collide with the seat-orientation
+-- cue or the compass medallion. is_row=true means a horizontal strip.
+local function draw_overflow_badge(hidden: integer, x: number, y: number, w: number, h: number, is_row: boolean)
+   local label = "+" .. tostring(hidden)
+   local font = love.graphics.getFont()
+   local lw = font:getWidth(label)
+   local lh = font:getHeight()
+   local bx, by: number, number
+   if is_row then
+      bx = x + w - lw - 6
+      by = y + (h - lh) / 2
+   else
+      bx = x + (w - lw) / 2
+      by = y + h - lh - 4
+   end
+   love.graphics.setColor(0.0, 0.0, 0.0, 0.55)
+   love.graphics.rectangle("fill", bx - 4, by - 2, lw + 8, lh + 4)
+   love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
+   love.graphics.print(label, bx, by)
+end
+
+-- Per-seat discard strip. Tiles are sized at ~75% of the player hand
+-- (40x52 portrait for P1/P3 rows, 52x40 landscape for P2/P4 cols).
+-- When discards exceed what fits, the strip shows the latest N and
+-- delegates to draw_overflow_badge for the count of clipped tiles.
+-- Full pile viewable via the D modal.
+--   "row_top"    — flow left→right, rows stack DOWN from y
+--   "row_bottom" — flow left→right, rows stack UP from y+h
+--   "col_left"   — flow top→bottom, cols stack RIGHT from x
+--   "col_right"  — flow top→bottom, cols stack LEFT from x+w
 local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: number, h: number, orientation: string)
    local discards = state.deal.players[seat].hand.discards
    if #discards == 0 then return end
@@ -1082,42 +1095,22 @@ local function draw_seat_discard_strip(seat: integer, x: number, y: number, w: n
          ty = y + i * (tile_h + gap)
       end
       tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
-         orientation = seat_orient, face_down = false,
+         orientation = seat_orient,
          accent_r = color.r, accent_g = color.g, accent_b = color.b,
       })
    end
 
    if hidden > 0 then
-      local label = "+" .. tostring(hidden)
-      love.graphics.setColor(0.0, 0.0, 0.0, 0.55)
-      local font = love.graphics.getFont()
-      local lw = font:getWidth(label)
-      local lh = font:getHeight()
-      -- Anchor the badge at the "newer" outside corner so it doesn't
-      -- collide with the seat-orientation cue or the compass medallion.
-      local bx, by: number, number
-      if is_row then
-         bx = x + w - lw - 6
-         by = y + (h - lh) / 2
-      else
-         bx = x + (w - lw) / 2
-         by = y + h - lh - 4
-      end
-      love.graphics.rectangle("fill", bx - 4, by - 2, lw + 8, lh + 4)
-      love.graphics.setColor(1.00, 0.92, 0.40, 1.0)
-      love.graphics.print(label, bx, by)
+      draw_overflow_badge(hidden, x, y, w, h, is_row)
    end
 end
 
--- All-discards modal. Triggered by the D key (and dismissed by ESC, D,
--- or any click). Renders full discard piles for all four seats so the
--- player can see history even when the inline strips have clipped to
--- the most recent N. Tiles here are smaller than the inline strip
--- (32x42) so a 20+ tile pile fits without wrapping into too many rows.
+-- All-discards modal: D opens it; ESC, D, or any click dismisses.
+-- Tiles here are 32x42 so a 20+ tile pile fits without overflow,
+-- complementing the inline strips' last-N clipping.
 local function draw_discards_modal()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
-   -- Dim the table behind the modal.
    love.graphics.setColor(0.0, 0.0, 0.0, 0.65)
    love.graphics.rectangle("fill", 0, 0, sw, sh)
 
@@ -1168,7 +1161,7 @@ local function draw_discards_modal()
          local ty = tiles_y + row_idx * (tile_h + gap)
          if ty + tile_h > row_y + row_h then break end
          tile_render.draw_tile(t, tx, ty, tile_w, tile_h, {
-            orientation = seat_orient, face_down = false,
+            orientation = seat_orient,
             accent_r = color.r, accent_g = color.g, accent_b = color.b,
          })
       end
@@ -1234,7 +1227,7 @@ local function draw_player_hand_row(x: number, y: number, w: number, h: number)
          br, bg, bb = 1.00, 0.55, 0.20
       end
       tile_render.draw_tile(t, tx, row_y, tile_w, tile_h, {
-         orientation = "south", face_down = false,
+         orientation = "south",
          accent_r = br, accent_g = bg, accent_b = bb,
          face_r = fr, face_g = fg, face_b = fb,
       })
@@ -1508,50 +1501,21 @@ local function dispatch_option(opt: ActionPromptOption)
    apply_player_action(opt.action, opt.label)
 end
 
--- Green-felt area of the bg_table image, in image-pixel coordinates.
--- Tuned by eye against assets/backgrounds/garden_table_concept_match_v1.png
--- (1672 x 941). Used to inset the hand strips so they sit on the table
--- rather than spanning the full window.
-local FELT_LEFT_PX   <const>: number = 280
-local FELT_RIGHT_PX  <const>: number = 1380
-local FELT_TOP_PX    <const>: number = 95
--- Pushed past the visible felt center so the player's hand sits at the
--- table's bottom edge (resting on the wood frame) instead of floating
--- above the green.
-local FELT_BOTTOM_PX <const>: number = 760
-local BG_IMG_W       <const>: number = 1672
-local BG_IMG_H       <const>: number = 941
-
-local function felt_area_in_window(sw: number, sh: number): number, number, number, number
-   local scale = math.max(sw / BG_IMG_W, sh / BG_IMG_H)
-   local off_x = (sw - BG_IMG_W * scale) / 2
-   local off_y = (sh - BG_IMG_H * scale) / 2
-   local x = off_x + FELT_LEFT_PX * scale
-   local y = off_y + FELT_TOP_PX  * scale
-   local w = (FELT_RIGHT_PX  - FELT_LEFT_PX) * scale
-   local h = (FELT_BOTTOM_PX - FELT_TOP_PX)  * scale
-   return x, y, w, h
-end
-
 local function on_draw()
    local sw = love.graphics.getWidth()
    local sh = love.graphics.getHeight()
 
    assets.draw_bg_cover()
 
-   -- Keep the cursor pointing at a real tile; this also runs in update
-   -- and keypressed but we re-check here so click-only flows have a
-   -- valid cursor when the prompt panel renders the Discard button.
+   -- Re-validate cursor here too: click-only flows render the prompt's
+   -- Discard button, which assumes a valid cursor tile.
    if has_seat1_pending_input(state.deal) then ensure_cursor_valid() end
 
-   -- Reset clickables; populated by draw helpers below.
    state.clickables = {}
 
    local margin = 8
    local hint_h = 20
 
-   -- Right side panel (log + inspector) is hidden in run mode unless F1
-   -- toggles it, and always shown in debug mode.
    local show_debug_panel = state.mode == "debug" or state.inspector_open
    local right_w = show_debug_panel and 360 or 0
    local right_x = sw - right_w - margin
@@ -1562,13 +1526,10 @@ local function on_draw()
       draw_corner_hud(margin, margin)
    end
 
-   -- Hand strips and discard pile sit inside the green-felt area of the
-   -- background image. The status bar (top) and hints (bottom) stay in
-   -- the window margins outside the felt.
-   local table_x, table_y, table_w, table_h = felt_area_in_window(sw, sh)
+   local table_x, table_y, table_w, table_h = assets.felt_area_in_window(sw, sh)
    if right_w > 0 then
-      -- Debug panel takes its slice from the right; shrink table_w so
-      -- the panel doesn't overlap the side hand col.
+      -- Debug panel takes the right slice; shrink the felt rect so the
+      -- side hand col doesn't overlap it.
       local right_edge = right_x
       if table_x + table_w > right_edge - margin then
          table_w = right_edge - margin - table_x
@@ -1667,10 +1628,8 @@ local function on_draw()
    draw_seat_discard_strip(3, compass_x,    p3_disc_y, compass_w,     strip_thick_h, "row_top")
    draw_seat_discard_strip(1, compass_x,    p1_disc_y, compass_w,     strip_thick_h, "row_bottom")
 
-   -- Outer bottom strip — between the felt's bottom edge and the hint
-   -- line. Hosts boons (left), action buttons (center), known wall
-   -- (right). Was previously rendered inside the table's center area;
-   -- moved out so the felt stays clean and the action UI is closer to
+   -- Outer bottom strip: boons (left), action buttons (centre), known
+   -- wall (right). Sits below the felt so the action UI is close to
    -- the player's hand.
    local bar_y = table_y + table_h + 8
    local bar_bottom = sh - hint_h - margin
@@ -1708,7 +1667,6 @@ local function on_draw()
       end
    end
 
-   -- Right column: log + inspector when visible.
    if show_debug_panel then
       local content_h = table_h
       if state.inspector_open then
@@ -1722,7 +1680,6 @@ local function on_draw()
 
    draw_hints(margin, sh - hint_h)
 
-   -- Modal overlay rendered last so it sits on top of everything.
    if state.discards_modal_open then
       draw_discards_modal()
    end

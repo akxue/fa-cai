@@ -91,4 +91,28 @@ function M.draw_menu_bg()
    M.draw_bg_dimmed(MENU_BG_ALPHA)
 end
 
+-- Green-felt rect of the bg_table image, in image-pixel coordinates.
+-- Tuned by eye against the 1672x941 source. The felt's bottom edge sits
+-- past the visible green so the player's hand rests on the wood frame
+-- rather than floating above it.
+local FELT_LEFT_PX   <const>: number = 280
+local FELT_RIGHT_PX  <const>: number = 1380
+local FELT_TOP_PX    <const>: number = 95
+local FELT_BOTTOM_PX <const>: number = 760
+local BG_IMG_W       <const>: number = 1672
+local BG_IMG_H       <const>: number = 941
+
+-- Returns (x, y, w, h) of the felt area within a window of (sw, sh)
+-- after the same cover-fit scaling that draw_bg_cover applies.
+function M.felt_area_in_window(sw: number, sh: number): number, number, number, number
+   local scale = math.max(sw / BG_IMG_W, sh / BG_IMG_H)
+   local off_x = (sw - BG_IMG_W * scale) / 2
+   local off_y = (sh - BG_IMG_H * scale) / 2
+   local x = off_x + FELT_LEFT_PX * scale
+   local y = off_y + FELT_TOP_PX  * scale
+   local w = (FELT_RIGHT_PX  - FELT_LEFT_PX) * scale
+   local h = (FELT_BOTTOM_PX - FELT_TOP_PX)  * scale
+   return x, y, w, h
+end
+
 return M
