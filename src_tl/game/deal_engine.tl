@@ -140,6 +140,12 @@ local function copy_active_boons(list: {ActiveBoon}): {ActiveBoon}
    return out
 end
 
+local function copy_string_list(list: {string}): {string}
+   local out: {string} = {}
+   for _, s in ipairs(list) do out[#out + 1] = s end
+   return out
+end
+
 local function copy_deal(d: DealState): DealState
    local players: {PlayerState} = {}
    for _, p in ipairs(d.players) do players[#players + 1] = copy_player(p) end
@@ -170,6 +176,7 @@ local function copy_deal(d: DealState): DealState
       active_boons             = copy_active_boons(d.active_boons),
       set_count_high_water     = d.set_count_high_water,
       reached_ting             = d.reached_ting,
+      declined_boons_this_deal = copy_string_list(d.declined_boons_this_deal),
    }
 end
 
@@ -509,6 +516,7 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
       active_boons             = {},
       set_count_high_water     = 0,
       reached_ting             = false,
+      declined_boons_this_deal = {},
    }
 end
 
