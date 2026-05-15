@@ -10,7 +10,8 @@ local M = {}
 global record RunState
    round_index:         integer
    lives:               integer
-   active_effects:      {ActiveEffectState}   -- filled out in S04
+   active_effects:      {ActiveEffectState}   -- M1 effects (D005)
+   active_boons:        {ActiveBoon}          -- M2 run-scoped boons (D012)
    previous_win_rating: Rating
    has_previous_win:    boolean
    rng:                 RngState
@@ -22,6 +23,7 @@ function M.new_run(rng: RngState): RunState
       round_index         = 1,
       lives               = 3,
       active_effects      = {},
+      active_boons        = {},
       previous_win_rating = "" as Rating,
       has_previous_win    = false,
       rng                 = rng,

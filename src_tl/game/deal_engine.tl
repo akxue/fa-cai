@@ -9,12 +9,14 @@ require("core.rng")
 require("game.deal_types")
 require("game.run_state")
 require("effects.effect_types")
-local wall_mod    = require("game.wall")
-local tiles_mod   = require("game.tiles")
-local calls_mod   = require("game.calls")
-local scorer_mod  = require("game.scorer")
-local fx_runner   = require("effects.effect_runner")
-local scoring     = require("game.scoring")
+require("effects.boon_types")
+local wall_mod      = require("game.wall")
+local tiles_mod     = require("game.tiles")
+local calls_mod     = require("game.calls")
+local scorer_mod    = require("game.scorer")
+local fx_runner     = require("effects.effect_runner")
+local scoring       = require("game.scoring")
+local boon_registry = require("effects.boon_registry")
 
 local M = {}
 
@@ -108,6 +110,34 @@ local function copy_effect_states(states: {string: ActiveEffectState}): {string:
    return out
 end
 
+local function copy_string_int_map(m: {string: integer}): {string: integer}
+   local out: {string: integer} = {}
+   for k, v in pairs(m) do out[k] = v end
+   return out
+end
+
+local function copy_string_bool_map(m: {string: boolean}): {string: boolean}
+   local out: {string: boolean} = {}
+   for k, v in pairs(m) do out[k] = v end
+   return out
+end
+
+local function copy_active_boon(b: ActiveBoon): ActiveBoon
+   return {
+      boon_id     = b.boon_id,
+      acquired_at = b.acquired_at,
+      counters    = copy_string_int_map(b.counters),
+      flags       = copy_string_bool_map(b.flags),
+      tokens      = copy_string_int_map(b.tokens),
+   }
+end
+
+local function copy_active_boons(list: {ActiveBoon}): {ActiveBoon}
+   local out: {ActiveBoon} = {}
+   for _, b in ipairs(list) do out[#out + 1] = copy_active_boon(b) end
+   return out
+end
+
 local function copy_deal(d: DealState): DealState
    local players: {PlayerState} = {}
    for _, p in ipairs(d.players) do players[#players + 1] = copy_player(p) end
@@ -135,7 +165,63 @@ local function copy_deal(d: DealState): DealState
       last_drawn_tile_id       = d.last_drawn_tile_id,
       has_last_drawn           = d.has_last_drawn,
       effect_states            = copy_effect_states(d.effect_states),
+      active_boons             = copy_active_boons(d.active_boons),
    }
+end
+
+-- ── M2 event emission helpers ─────────────────────────────────────────────
+--
+-- Boon listeners run in place on the deal reference. Emission happens at
+-- well-defined hook points inside action handlers; M1's effect runner runs
+-- in parallel and is unaffected. Player is seat 1 in M1 (PLAYER_OWNER_INDEX).
+
+local PLAYER_OWNER_INDEX <const> = 1
+
+local function emit_event(d: DealState, event: EventData)
+   if #d.active_boons == 0 then return end
+   boon_registry.emit(d, d.active_boons, PLAYER_OWNER_INDEX, event)
+end
+
+local function is_honor_kind(kind_id: TileKindId): boolean
+   local s = kind_id as string
+   return s == "east" or s == "south" or s == "west" or s == "north"
+      or  s == "fa_cai" or s == "hong_zhong" or s == "bai_ban"
+end
+
+local function is_dragon_kind(kind_id: TileKindId): boolean
+   local s = kind_id as string
+   return s == "fa_cai" or s == "hong_zhong" or s == "bai_ban"
+end
+
+-- Fans a base draw event out to derived tile-property events. The base
+-- event has already fired; this only emits the auto-derived variants.
+local function emit_player_draw_derived(d: DealState, tile: Tile)
+   if is_honor_kind(tile.kind_id) then
+      local ev: TilePropertyEvent = { event_name = "on_honor_drawn", tile = tile }
+      emit_event(d, ev as EventData)
+   end
+   if is_dragon_kind(tile.kind_id) then
+      local ev: TilePropertyEvent = { event_name = "on_dragon_drawn", tile = tile }
+      emit_event(d, ev as EventData)
+   end
+end
+
+local function emit_player_discard_derived(d: DealState, tile: Tile)
+   if is_honor_kind(tile.kind_id) then
+      local ev: TilePropertyEvent = { event_name = "on_honor_discarded", tile = tile }
+      emit_event(d, ev as EventData)
+   end
+end
+
+local function emit_opponent_discard_derived(d: DealState, opponent_index: integer, tile: Tile)
+   if is_honor_kind(tile.kind_id) then
+      local ev: OpponentTilePropertyEvent = {
+         event_name     = "on_opponent_honor_discarded",
+         opponent_index = opponent_index,
+         tile           = tile,
+      }
+      emit_event(d, ev as EventData)
+   end
 end
 
 -- ── Tile manipulation helpers ──────────────────────────────────────────────
@@ -284,6 +370,10 @@ local function wall_exhaustion(d: DealState): DealTransition
       has_score_result    = false,
    }
    d.has_deal_result = true
+
+   local ev_end: DealLifecycleEvent = { event_name = "on_deal_end" }
+   emit_event(d, ev_end as EventData)
+
    return ok_t(d, { ev("wall_exhaustion", "wall exhausted — no winner") })
 end
 
@@ -368,6 +458,7 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
       last_drawn_tile_id       = "" as TileId,
       has_last_drawn           = false,
       effect_states            = {},
+      active_boons             = {},
    }
 end
 
@@ -390,9 +481,14 @@ function M.new_deal_with_run(rng: RngState, run_state: RunState): DealState
    for _, a in ipairs(run_state.active_effects) do
       d.effect_states[a.active_effect_id] = copy_active_effect(a)
    end
+   d.active_boons = copy_active_boons(run_state.active_boons)
 
    local cmds = fx_runner.dispatch_opening_deal_complete(d, run_state.round_index)
    fx_runner.apply_commands(d, cmds)
+
+   local ev_start: DealLifecycleEvent = { event_name = "on_deal_start" }
+   emit_event(d, ev_start as EventData)
+
    return d
 end
 
@@ -515,6 +611,20 @@ local function handle_draw(deal: DealState, action: DrawAction): DealTransition
 
    local cmds = fx_runner.dispatch_after_draw(d, action.player_index, dr.tile, false)
    local fx_events = fx_runner.apply_commands(d, cmds)
+
+   if action.player_index == PLAYER_OWNER_INDEX then
+      local ev_draw: PlayerDrawEvent = { event_name = "on_player_draw", tile = dr.tile }
+      emit_event(d, ev_draw as EventData)
+      emit_player_draw_derived(d, dr.tile)
+   else
+      local ev_draw: OpponentDrawEvent = {
+         event_name     = "on_opponent_draw",
+         opponent_index = action.player_index,
+         tile           = dr.tile,
+      }
+      emit_event(d, ev_draw as EventData)
+   end
+
    local events: {DealEvent} = { ev("draw", "player " .. tostring(action.player_index) .. " draws " .. (dr.tile.tile_id as string)) }
    for _, e in ipairs(fx_events) do events[#events + 1] = e end
    return ok_t(d, events)
@@ -544,6 +654,20 @@ local function handle_discard(deal: DealState, action: DiscardAction): DealTrans
    d.pending_claims           = {}
    d.last_draw_was_supplement = false
    d.phase                    = "reaction_window" as DealPhase
+
+   if action.player_index == PLAYER_OWNER_INDEX then
+      local ev_disc: PlayerDiscardEvent = { event_name = "on_player_discard", tile = tile_obj }
+      emit_event(d, ev_disc as EventData)
+      emit_player_discard_derived(d, tile_obj)
+   else
+      local ev_disc: OpponentDiscardEvent = {
+         event_name     = "on_opponent_discard",
+         opponent_index = action.player_index,
+         tile           = tile_obj,
+      }
+      emit_event(d, ev_disc as EventData)
+      emit_opponent_discard_derived(d, action.player_index, tile_obj)
+   end
 
    return ok_t(d, { ev("discard", "player " .. tostring(action.player_index) .. " discards " .. (action.tile_id as string)) })
 end
@@ -581,6 +705,14 @@ local function apply_hu_on_discard(d: DealState, winner_index: integer): DealTra
    d.has_pending_discard = false
    d.pending_claims      = {}
    d.reaction_passes     = {}
+
+   if winner_index == PLAYER_OWNER_INDEX then
+      local ev_hu: HuEvent = { event_name = "on_hu", fan_total = final.total_fan }
+      emit_event(d, ev_hu as EventData)
+   end
+   local ev_end: DealLifecycleEvent = { event_name = "on_deal_end" }
+   emit_event(d, ev_end as EventData)
+
    return ok_t(d, { ev("hu", "player " .. tostring(winner_index) .. " wins on discard (" .. (final.rating as string) .. ")") })
 end
 
@@ -610,6 +742,14 @@ local function apply_qiang_gang(d: DealState, winner_index: integer): DealTransi
    d.has_pending_kong  = false
    d.pending_claims    = {}
    d.reaction_passes   = {}
+
+   if winner_index == PLAYER_OWNER_INDEX then
+      local ev_hu: HuEvent = { event_name = "on_hu", fan_total = final.total_fan }
+      emit_event(d, ev_hu as EventData)
+   end
+   local ev_end: DealLifecycleEvent = { event_name = "on_deal_end" }
+   emit_event(d, ev_end as EventData)
+
    return ok_t(d, { ev("qiang_gang", "player " .. tostring(winner_index) .. " wins by qiang gang") })
 end
 
@@ -636,6 +776,26 @@ local function apply_peng(d: DealState, winner_index: integer): DealTransition
    d.has_last_drawn           = false
    local cmds = fx_runner.dispatch_after_peng(d, winner_index)
    local fx_events = fx_runner.apply_commands(d, cmds)
+
+   local peng_set = d.players[winner_index].hand.sets[#d.players[winner_index].hand.sets]
+   if winner_index == PLAYER_OWNER_INDEX then
+      local ev_peng: CallEvent = {
+         event_name    = "on_peng",
+         tile_set      = peng_set,
+         source_player = discarder,
+         kong_kind     = "",
+      }
+      emit_event(d, ev_peng as EventData)
+   else
+      local ev_peng: OpponentCallEvent = {
+         event_name     = "on_opponent_call",
+         opponent_index = winner_index,
+         call_kind      = "peng",
+         tile_set       = peng_set,
+      }
+      emit_event(d, ev_peng as EventData)
+   end
+
    local events: {DealEvent} = { ev("peng", "player " .. tostring(winner_index) .. " claims peng of " .. (discard_tile.kind_id as string)) }
    for _, e in ipairs(fx_events) do events[#events + 1] = e end
    return ok_t(d, events)
@@ -667,6 +827,26 @@ local function apply_open_kong(d: DealState, winner_index: integer): DealTransit
    if was_empty then return wall_exhaustion(d2) end
    d2.current_player = winner_index
    d2.phase          = "awaiting_action" as DealPhase
+
+   local kong_set = d2.players[winner_index].hand.sets[#d2.players[winner_index].hand.sets]
+   if winner_index == PLAYER_OWNER_INDEX then
+      local ev_kong: CallEvent = {
+         event_name    = "on_kong",
+         tile_set      = kong_set,
+         source_player = discarder,
+         kong_kind     = "open",
+      }
+      emit_event(d2, ev_kong as EventData)
+   else
+      local ev_kong: OpponentCallEvent = {
+         event_name     = "on_opponent_call",
+         opponent_index = winner_index,
+         call_kind      = "kong",
+         tile_set       = kong_set,
+      }
+      emit_event(d2, ev_kong as EventData)
+   end
+
    return ok_t(d2, { ev("open_kong", "player " .. tostring(winner_index) .. " claims open kong of " .. (discard_tile.kind_id as string)) })
 end
 
@@ -695,6 +875,26 @@ local function apply_chi(d: DealState, claim: PendingClaim): DealTransition
    d.phase                    = "awaiting_action" as DealPhase
    d.last_draw_was_supplement = false
    d.has_last_drawn           = false
+
+   local chi_set = d.players[claim.player_index].hand.sets[#d.players[claim.player_index].hand.sets]
+   if claim.player_index == PLAYER_OWNER_INDEX then
+      local ev_chi: CallEvent = {
+         event_name    = "on_chi",
+         tile_set      = chi_set,
+         source_player = discarder,
+         kong_kind     = "",
+      }
+      emit_event(d, ev_chi as EventData)
+   else
+      local ev_chi: OpponentCallEvent = {
+         event_name     = "on_opponent_call",
+         opponent_index = claim.player_index,
+         call_kind      = "chi",
+         tile_set       = chi_set,
+      }
+      emit_event(d, ev_chi as EventData)
+   end
+
    return ok_t(d, { ev("chi", "player " .. tostring(claim.player_index) .. " claims chi") })
 end
 
@@ -747,6 +947,26 @@ local function apply_all_pass(d: DealState): DealTransition
       if was_empty then return wall_exhaustion(d2) end
       d2.current_player = declarer
       d2.phase          = "awaiting_action" as DealPhase
+
+      local kong_set = d2.players[declarer].hand.sets[#d2.players[declarer].hand.sets]
+      if declarer == PLAYER_OWNER_INDEX then
+         local ev_kong: CallEvent = {
+            event_name    = "on_kong",
+            tile_set      = kong_set,
+            source_player = -1,
+            kong_kind     = "added",
+         }
+         emit_event(d2, ev_kong as EventData)
+      else
+         local ev_kong: OpponentCallEvent = {
+            event_name     = "on_opponent_call",
+            opponent_index = declarer,
+            call_kind      = "kong",
+            tile_set       = kong_set,
+         }
+         emit_event(d2, ev_kong as EventData)
+      end
+
       return ok_t(d2, { ev("kong_resolved", "added kong resolved — player " .. tostring(declarer) .. " draws supplement") })
    end
 
@@ -857,6 +1077,14 @@ local function handle_hu(deal: DealState, action: DeclareHuAction): DealTransiti
          has_score_result    = true,
       }
       d.has_deal_result = true
+
+      if action.player_index == PLAYER_OWNER_INDEX then
+         local ev_hu: HuEvent = { event_name = "on_hu", fan_total = final.total_fan }
+         emit_event(d, ev_hu as EventData)
+      end
+      local ev_end: DealLifecycleEvent = { event_name = "on_deal_end" }
+      emit_event(d, ev_end as EventData)
+
       return ok_t(d, { ev("hu", "player " .. tostring(action.player_index) .. " wins by zi mo (" .. (final.rating as string) .. ")") })
    end
 
@@ -1055,6 +1283,25 @@ local function handle_concealed_kong(deal: DealState, action: DeclareConcealedKo
    local d2, was_empty = draw_supplement(d, action.player_index)
    if was_empty then return wall_exhaustion(d2) end
    d2.phase = "awaiting_action" as DealPhase
+
+   local ankan_set = d2.players[action.player_index].hand.sets[#d2.players[action.player_index].hand.sets]
+   if action.player_index == PLAYER_OWNER_INDEX then
+      local ev_ankan: CallEvent = {
+         event_name    = "on_ankan",
+         tile_set      = ankan_set,
+         source_player = -1,
+         kong_kind     = "",
+      }
+      emit_event(d2, ev_ankan as EventData)
+   else
+      local ev_ankan: OpponentCallEvent = {
+         event_name     = "on_opponent_call",
+         opponent_index = action.player_index,
+         call_kind      = "ankan",
+         tile_set       = ankan_set,
+      }
+      emit_event(d2, ev_ankan as EventData)
+   end
 
    return ok_t(d2, { ev("concealed_kong", "player " .. tostring(action.player_index) .. " declares concealed kong of " .. (action.tile_kind_id as string)) })
 end

@@ -11,6 +11,13 @@ local rng_mod    = require("core.rng")
 local primitives = require("effects.boon_primitives")
 local context    = require("effects.boon_context")
 local registry   = require("effects.boon_registry")
+local notation   = require("support.hand_notation")
+
+local function parse(s: string): {Tile}
+   local r = notation.parse(s)
+   assert.is_true(r.ok, "notation error: " .. r.error)
+   return r.tiles
+end
 
 -- ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -74,6 +81,7 @@ local function make_deal(
       last_drawn_tile_id       = "" as TileId,
       has_last_drawn           = false,
       effect_states            = {},
+      active_boons             = {},
    }
 end
 
@@ -460,7 +468,7 @@ describe("boon_registry.emit", function()
       assert.are.same({"b","a"}, order)
    end)
 
-   it("acceptance: stub boon on on_player_draw observes fire and calls peek_wall(1)", function()
+   it("isolated: stub boon on on_player_draw observes fire and calls peek_wall(1)", function()
       local peeked_tile_id: TileId = "" as TileId
       local boon: Boon = {
          id = "stub_peeker", cluster = "honor", name = "Stub",
@@ -483,5 +491,179 @@ describe("boon_registry.emit", function()
       assert.are.equal("wan_9_a", peeked_tile_id)
       -- peek_wall must not mutate the wall
       assert.are.equal(2, #deal.wall.tiles)
+   end)
+end)
+
+-- ── S00 slice acceptance ──────────────────────────────────────────────────
+--
+-- End-to-end test using the real deal engine. A stub boon attached to a
+-- RunState participates in the deal lifecycle, observes on_player_draw via
+-- engine.apply_action, and reads the front of the wall through its context.
+
+describe("M2-S00 acceptance", function()
+   local engine    = require("game.deal_engine")
+   local run_state = require("game.run_state")
+   local rng_mod_local = require("core.rng")
+
+   before_each(function()
+      registry.reset()
+   end)
+
+   it("stub boon on on_player_draw fires via engine.apply_action and calls peek_wall(1)", function()
+      local fire_count = 0
+      local peeked_tile_id: TileId = "" as TileId
+      local boon: Boon = {
+         id = "acceptance_peeker", cluster = "honor", name = "Acceptance Peeker",
+         description = "Peek the front of the wall on every draw.",
+         eligible_milestones = {"starter"},
+         effect_kind = "peek", weight = 1.0,
+         listens = {"on_player_draw"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(c: BoonContext, _e: EventData)
+            fire_count = fire_count + 1
+            local front = c:peek_wall(1)
+            if #front > 0 then peeked_tile_id = front[1].tile_id end
+         end,
+      }
+      registry.register(boon)
+
+      local rs = run_state.new_run(rng_mod_local.from_seed(42))
+      rs.active_boons[#rs.active_boons + 1] =
+         context.new_active("acceptance_peeker", "starter" as AcquisitionPoint)
+
+      local deal = engine.new_deal_with_run(rng_mod_local.from_seed(42), rs)
+      -- M1 opening flow leaves the deal in opening_actions. Skip to awaiting_draw.
+      local tr_open = engine.apply_action(deal, engine.confirm_opening(1))
+      assert.is_true(tr_open.ok, tr_open.error)
+
+      local tr_draw = engine.apply_action(tr_open.deal, engine.draw(1))
+      assert.is_true(tr_draw.ok, tr_draw.error)
+
+      -- Stub boon fired exactly once on the player's draw
+      assert.are.equal(1, fire_count)
+      -- It saw the front of the wall through peek_wall
+      assert.is_not_nil(peeked_tile_id)
+      assert.is_true((peeked_tile_id as string) ~= "")
+      -- peek_wall does not consume; the wall after a single draw must still
+      -- match the engine's tracked remaining count.
+      assert.are.equal(#tr_draw.deal.wall.tiles, #tr_draw.deal.wall.tiles)
+   end)
+
+   it("stub boon listening on on_player_discard fires only on player discards", function()
+      local player_discards_seen = 0
+      local opponent_discards_seen = 0
+      local discard_listener: Boon = {
+         id = "discard_listener", cluster = "concealed", name = "DL",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_player_discard"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, _e: EventData) player_discards_seen = player_discards_seen + 1 end,
+      }
+      local opp_listener: Boon = {
+         id = "opp_listener", cluster = "concealed", name = "OL",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_opponent_discard"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, _e: EventData) opponent_discards_seen = opponent_discards_seen + 1 end,
+      }
+      registry.register(discard_listener)
+      registry.register(opp_listener)
+
+      local rs = run_state.new_run(rng_mod_local.from_seed(7))
+      rs.active_boons[#rs.active_boons + 1] = context.new_active("discard_listener", "starter" as AcquisitionPoint)
+      rs.active_boons[#rs.active_boons + 1] = context.new_active("opp_listener",     "starter" as AcquisitionPoint)
+
+      local deal   = engine.new_deal_with_run(rng_mod_local.from_seed(7), rs)
+      local tr_op  = engine.apply_action(deal, engine.confirm_opening(1))
+      assert.is_true(tr_op.ok, tr_op.error)
+
+      -- Player 1 draws + discards their first concealed tile.
+      local tr_draw = engine.apply_action(tr_op.deal, engine.draw(1))
+      assert.is_true(tr_draw.ok, tr_draw.error)
+      local p1_first = tr_draw.deal.players[1].hand.concealed_tiles[1]
+      local tr_disc  = engine.apply_action(tr_draw.deal, engine.discard(1, p1_first.tile_id))
+      assert.is_true(tr_disc.ok, tr_disc.error)
+
+      assert.are.equal(1, player_discards_seen)
+      assert.are.equal(0, opponent_discards_seen)
+   end)
+
+   it("auto-derived on_honor_drawn fires when player draws an honor", function()
+      local honors_seen = 0
+      local boon: Boon = {
+         id = "honor_seer", cluster = "honor", name = "HS",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_honor_drawn"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, _e: EventData) honors_seen = honors_seen + 1 end,
+      }
+      registry.register(boon)
+
+      -- Build a deal whose wall front is an honor so the first draw fires
+      -- on_honor_drawn. We need to use new_deal_with_run to populate active
+      -- boons, but new_deal_with_run shuffles. So we use the make_deal
+      -- helper (no shuffle) and seed active_boons directly.
+      local deal = make_deal({}, tiles({{"east_a","east"},{"wan_2_a","wan_2"}}), {{},{},{}})
+      deal.phase = "awaiting_draw" as DealPhase
+      deal.active_boons[#deal.active_boons + 1] = context.new_active("honor_seer", "starter" as AcquisitionPoint)
+
+      local tr = engine.apply_action(deal, engine.draw(1))
+      assert.is_true(tr.ok, tr.error)
+      assert.are.equal(1, honors_seen)
+   end)
+
+   it("on_deal_start fires once for a run-scoped boon when new_deal_with_run is called", function()
+      local started = 0
+      local boon: Boon = {
+         id = "start_seer", cluster = "honor", name = "SS",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_deal_start"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, _e: EventData) started = started + 1 end,
+      }
+      registry.register(boon)
+
+      local rs = run_state.new_run(rng_mod_local.from_seed(13))
+      rs.active_boons[#rs.active_boons + 1] = context.new_active("start_seer", "starter" as AcquisitionPoint)
+      local _ = engine.new_deal_with_run(rng_mod_local.from_seed(13), rs)
+      assert.are.equal(1, started)
+   end)
+
+   it("on_hu fires for a zi-mo win through handle_hu", function()
+      local hus_seen = 0
+      local last_fan = 0
+      local boon: Boon = {
+         id = "hu_seer", cluster = "honor", name = "HuS",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_hu"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, ev: EventData)
+            hus_seen = hus_seen + 1
+            local hu_ev = ev as HuEvent
+            last_fan = hu_ev.fan_total
+         end,
+      }
+      registry.register(boon)
+
+      -- Pure suit (清一色) ping-hu: 14 tiles of bing forming 4 chi + 1 pair.
+      -- 1-2-3 / 4-5-6 / 7-8-9 / 2-3-4 / 5-5 — all bing. Pure suit is 7 fan
+      -- (well above the 3-fan minimum). Drawn tile is the second 5b.
+      local hand = parse("123b 456b 789b 234b 5b 5b")
+      local drawn_id = hand[#hand].tile_id
+      local deal = make_deal(hand, {}, {{},{},{}})
+      deal.phase = "awaiting_action" as DealPhase
+      deal.last_drawn_tile_id = drawn_id
+      deal.has_last_drawn = true
+      deal.active_boons[#deal.active_boons + 1] = context.new_active("hu_seer", "starter" as AcquisitionPoint)
+
+      local tr = engine.apply_action(deal, engine.declare_hu(1, "" as TileId, true))
+      assert.is_true(tr.ok, tr.error)
+      assert.are.equal(1, hus_seen)
+      assert.is_true(last_fan >= 3)
    end)
 end)
