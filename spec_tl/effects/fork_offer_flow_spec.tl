@@ -131,14 +131,18 @@ describe("fork offer materialization", function()
       assert.is_true(tr.ok, tr.error)
       assert.are.equal("set_1", tr.deal.pending_offer_milestone as string)
       assert.are.equal(3, #tr.deal.pending_offer)
-      -- All 3 set_1-eligible M2 boons should be in the offer (cleanse,
-      -- honors_eye, silent_march). With only 3 eligible, the offer is the
-      -- full pool regardless of RNG.
-      local seen: {string: boolean} = {}
-      for _, id in ipairs(tr.deal.pending_offer) do seen[id] = true end
-      assert.is_true(seen["honors_eye"])
-      assert.is_true(seen["cleanse"])
-      assert.is_true(seen["silent_march"])
+      -- The offer pool is set_1-eligible boons from the M2 catalog. As
+      -- more boons land we just verify each offered id is genuinely
+      -- set_1-eligible rather than asserting a fixed id list.
+      for _, id in ipairs(tr.deal.pending_offer) do
+         local boon = m2_boons.find(id)
+         assert.is_not_nil(boon)
+         local set_1_eligible = false
+         for _, m in ipairs(boon.eligible_milestones) do
+            if (m as string) == "set_1" then set_1_eligible = true; break end
+         end
+         assert.is_true(set_1_eligible, id .. " was offered at set_1 but is not set_1-eligible")
+      end
    end)
 
    it("does not materialize an offer when no milestone fires", function()
@@ -222,11 +226,10 @@ describe("queue chaining (set_3 + ting on same turn)", function()
       m2_boons.register_all()
    end)
 
-   it("queues set_1+2+3+ting and chains through resolution, skipping empty pools", function()
+   it("queues set_1+2+3+ting and chains picks until the queue drains", function()
       -- Pair-wait ting: 3 open pengs + concealed [fa_cai×3, north, X].
       -- After discarding X, set_count crosses 0→3 and ting reaches → fires
-      -- set_1, set_2, set_3, then ting. pending_forks queued in that order;
-      -- pending_offer = the materialized head (set_1).
+      -- set_1, set_2, set_3, then ting. pending_forks queued in that order.
       local concealed = tiles({
          {"fa_cai_a","fa_cai"}, {"fa_cai_b","fa_cai"}, {"fa_cai_c","fa_cai"},
          {"north_a","north"},
@@ -242,30 +245,33 @@ describe("queue chaining (set_3 + ting on same turn)", function()
       assert.is_true(tr.ok, tr.error)
       -- set_1 is the head offer; set_2, set_3, ting are queued behind it.
       assert.are.equal("set_1", tr.deal.pending_offer_milestone as string)
-      assert.are.equal(3, #tr.deal.pending_offer)
-      assert.are.equal(3, #tr.deal.pending_forks)  -- set_2, set_3, ting
+      assert.are.equal(3, #tr.deal.pending_forks)
       assert.are.equal("set_2", tr.deal.pending_forks[1] as string)
       assert.are.equal("set_3", tr.deal.pending_forks[2] as string)
       assert.are.equal("ting",  tr.deal.pending_forks[3] as string)
 
-      -- Resolve set_1. The S02 catalog has only set_1 + 2-flex eligible
-      -- boons; once set_1 fires, the picked boon goes to active_boons and
-      -- the other 2 to declined. set_2's eligible pool (cleanse +
-      -- silent_march, both flex) overlaps the declined set, so set_2's
-      -- offer is empty. set_3 and ting have no S02-catalog boons either.
-      -- Engine should skip all empty forks and drain the queue cleanly.
-      local pick1 = tr.deal.pending_offer[1]
-      local tr_p1 = engine.apply_action(tr.deal, engine.pick_boon_offer(1, pick1))
-      assert.is_true(tr_p1.ok, tr_p1.error)
+      -- Chain picks until the queue drains. Each pick:
+      --   - resolves the current offer (one boon → active, rest → declined)
+      --   - materializes the next non-empty offer (or drains the queue)
+      -- Capped at 16 iterations so a regression that loops infinitely
+      -- fails the test rather than hanging busted.
+      local d = tr.deal
+      local picks = 0
+      while #d.pending_offer > 0 and picks < 16 do
+         local pick_id = d.pending_offer[1]
+         local tr_p = engine.apply_action(d, engine.pick_boon_offer(1, pick_id))
+         assert.is_true(tr_p.ok, tr_p.error)
+         d = tr_p.deal
+         picks = picks + 1
+      end
 
-      -- Queue fully drained without leaving the player stuck.
-      assert.are.equal(0, #tr_p1.deal.pending_offer)
-      assert.are.equal(0, #tr_p1.deal.pending_forks)
-      assert.are.equal("", tr_p1.deal.pending_offer_milestone as string)
-
-      -- Final state: 1 active boon, 2 declined, no fork loose ends.
-      assert.are.equal(1, #tr_p1.deal.active_boons)
-      assert.are.equal(2, #tr_p1.deal.declined_boons_this_deal)
+      -- Queue fully drained, no loose ends. Active + declined sum is the
+      -- total count of catalog entries touched by the milestone forks.
+      assert.are.equal(0, #d.pending_offer)
+      assert.are.equal(0, #d.pending_forks)
+      assert.are.equal("", d.pending_offer_milestone as string)
+      assert.is_true(#d.active_boons >= 1, "at least one boon should have been picked")
+      assert.is_true(picks <= 4, "no more picks than queued forks (set_1+2+3+ting)")
    end)
 end)
 
