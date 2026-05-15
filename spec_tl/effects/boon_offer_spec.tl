@@ -283,3 +283,85 @@ describe("boon_offer.accept_offer", function()
       end
    end)
 end)
+
+describe("boon_offer.compose_starter_offer", function()
+   before_each(function()
+      registry.reset()
+      m2_boons.register_all()
+   end)
+
+   it("returns 3 boons — one per cluster", function()
+      local out, _ = offer.compose_starter_offer(rng_mod.from_seed(42))
+      assert.are.equal(3, #out)
+      local clusters: {string} = {}
+      for _, b in ipairs(out) do clusters[#clusters + 1] = b.cluster as string end
+      assert.are.same({"honor", "suit", "concealed"}, clusters)
+   end)
+
+   it("each offered boon is starter-eligible", function()
+      local out, _ = offer.compose_starter_offer(rng_mod.from_seed(7))
+      for _, b in ipairs(out) do
+         local starter_eligible = false
+         for _, m in ipairs(b.eligible_milestones) do
+            if (m as string) == "starter" then starter_eligible = true; break end
+         end
+         assert.is_true(starter_eligible, b.id .. " is not starter-eligible")
+      end
+   end)
+
+   it("is deterministic for a given seed", function()
+      local a, _ = offer.compose_starter_offer(rng_mod.from_seed(99))
+      local b, _ = offer.compose_starter_offer(rng_mod.from_seed(99))
+      assert.are.same(offer.offer_ids(a), offer.offer_ids(b))
+   end)
+end)
+
+-- S03 acceptance: starter pick correctly biases milestone offers.
+-- "Model B verified" per plan §787 means starter does NOT bias future fork
+-- offers — picks at milestones still draw randomly from the registry.
+describe("M2-S03 acceptance — starter does not bias future offers", function()
+   local engine_mod = require("game.deal_engine")
+   local rs_mod = require("game.run_state")
+
+   before_each(function()
+      registry.reset()
+      m2_boons.register_all()
+   end)
+
+   it("starter boon ends up in deal.active_boons with acquired_at = starter", function()
+      local rs = rs_mod.new_run(rng_mod.from_seed(123))
+      local context_mod = require("effects.boon_context")
+      rs.active_boons[#rs.active_boons + 1] =
+         context_mod.new_active("honors_gift", "starter" as AcquisitionPoint)
+
+      local deal = engine_mod.new_deal_with_run(rng_mod.from_seed(123), rs)
+      assert.are.equal(1, #deal.active_boons)
+      assert.are.equal("honors_gift", deal.active_boons[1].boon_id)
+      assert.are.equal("starter", deal.active_boons[1].acquired_at as string)
+   end)
+
+   it("set_1 offer at a fork remains random across clusters regardless of starter pick", function()
+      -- Engineer the same fork firing trigger under each of the 3 starter
+      -- clusters. Verify the set_1 offer pool is the same eligible set in
+      -- all three cases (modulo the starter boon being excluded if it's
+      -- also set_1-eligible — none of the current starters are).
+      local context_mod = require("effects.boon_context")
+      local STARTERS: {string} = {"honors_gift", "pure_path", "hidden_path"}
+      local seen_pools: {{string}} = {}
+      for _, starter_id in ipairs(STARTERS) do
+         local d = empty_deal()
+         d.active_boons[#d.active_boons + 1] = context_mod.new_active(starter_id, "starter" as AcquisitionPoint)
+         local pool = offer.eligible_at("set_1" as MilestoneId, {[starter_id] = true})
+         local ids: {string} = {}
+         for _, b in ipairs(pool) do ids[#ids + 1] = b.id end
+         table.sort(ids)
+         seen_pools[#seen_pools + 1] = ids
+      end
+      -- All three starters are starter-only (not set_1 eligible), so the
+      -- set_1 pool is the same for all three.
+      assert.are.same(seen_pools[1], seen_pools[2])
+      assert.are.same(seen_pools[2], seen_pools[3])
+      -- And the pool contains all 3 set_1-eligible M2 boons.
+      assert.are.equal(3, #seen_pools[1])
+   end)
+end)

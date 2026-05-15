@@ -98,6 +98,35 @@ function M.offer_ids(offer: {Boon}): {string}
    return out
 end
 
+-- M2-S03: builds the pre-deal starter offer. Selects one starter-eligible
+-- boon per cluster (Honor, Suit, Concealed) — picked uniformly at random
+-- per cluster from the catalog. Output is ordered Honor, Suit, Concealed.
+-- Clusters with no starter-eligible boons are silently skipped (defensive;
+-- the plan calls for exactly one per cluster, so the offer is normally 3).
+function M.compose_starter_offer(rng: RngState): {Boon}, RngState
+   local CLUSTERS: {string} = {"honor", "suit", "concealed"}
+   local out: {Boon} = {}
+   local cur = rng
+   for _, cluster in ipairs(CLUSTERS) do
+      local candidates: {Boon} = {}
+      for _, b in ipairs(registry.all()) do
+         local is_starter = false
+         for _, m in ipairs(b.eligible_milestones) do
+            if (m as string) == "starter" then is_starter = true; break end
+         end
+         if is_starter and (b.cluster as string) == cluster then
+            candidates[#candidates + 1] = b
+         end
+      end
+      if #candidates > 0 then
+         local r = rng_mod.next_int(cur, 1, #candidates)
+         out[#out + 1] = candidates[r.value]
+         cur = r.rng
+      end
+   end
+   return out, cur
+end
+
 -- Resolves a pick against the current offer:
 --   - Adds the picked boon as an ActiveBoon on the deal.
 --   - Marks the other offered boons as declined (added to declined list).

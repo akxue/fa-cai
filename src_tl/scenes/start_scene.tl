@@ -5,7 +5,10 @@ require("app.scene_stack")
 
 local scene_stack       = require("app.scene_stack")
 local table_scene       = require("scenes.table_scene")
-local boon_select_scene = require("scenes.boon_select_scene")
+-- M2-S03: route "Start Run" to the M2 starter pick. M1's boon_select_scene
+-- still exists for reference but is no longer reachable from the menu;
+-- S05 removes it along with the rest of the M1 boon system.
+local boon_select_scene = require("scenes.m2_boon_select_scene")
 local clickable_mod     = require("ui.clickable")
 local assets            = require("app.assets")
 
