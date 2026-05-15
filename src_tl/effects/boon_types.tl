@@ -8,9 +8,11 @@ require("game.deal_types")
 -- ── Identity ──────────────────────────────────────────────────────────────
 
 global type Cluster          = string   -- "honor" | "suit" | "concealed"
-global type MilestoneId      = string   -- "starter" | "set_1" | "set_2" | "set_3" | "ting"
 global type BoonEffectKind   = string   -- "peek" | "mulligan" | "swap" | "extra_draw" | "info" | "token"
 global type EventName        = string   -- see fixed vocabulary in MILESTONE-2-PLAN.md §148
+
+-- MilestoneId, AcquisitionPoint, and ActiveBoon are declared in
+-- game/deal_types.tl as domain state. See the note there.
 
 -- AcquisitionPoint and ActiveBoon are declared in game/deal_types.tl
 -- (alongside ActiveEffectState) because they are domain state stored on

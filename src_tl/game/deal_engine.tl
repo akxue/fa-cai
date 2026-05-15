@@ -17,6 +17,7 @@ local scorer_mod        = require("game.scorer")
 local fx_runner         = require("effects.effect_runner")
 local scoring           = require("game.scoring")
 local boon_registry     = require("effects.boon_registry")
+local boon_offer        = require("effects.boon_offer")
 local milestones        = require("game.milestone_detection")
 local ting_distance_mod = require("game.ting_distance")
 
@@ -177,6 +178,9 @@ local function copy_deal(d: DealState): DealState
       set_count_high_water     = d.set_count_high_water,
       reached_ting             = d.reached_ting,
       declined_boons_this_deal = copy_string_list(d.declined_boons_this_deal),
+      pending_forks            = copy_string_list(d.pending_forks),
+      pending_offer            = copy_string_list(d.pending_offer),
+      pending_offer_milestone  = d.pending_offer_milestone,
    }
 end
 
@@ -245,11 +249,36 @@ end
 -- High-water tracking means thresholds don't re-fire if the player drops
 -- below and climbs back (plan §326). reached_ting is one-shot per deal.
 
+-- Materializes the next non-empty offer from pending_forks. Skips milestones
+-- whose eligible pool is empty (§369 exhaustion fallback applied at the
+-- queue level so the player is never stuck on a fork with nothing to pick).
+-- Does nothing if pending_forks is empty or pending_offer is already
+-- non-empty. Advances deal.rng (offer pool is deterministic from current
+-- RNG state — see plan §282 and the deferred-determinism note in PR #18).
+local function materialize_next_offer(d: DealState)
+   if #d.pending_offer > 0 then return end
+   while #d.pending_forks > 0 do
+      local milestone = d.pending_forks[1]
+      table.remove(d.pending_forks, 1)
+      local offer, new_rng = boon_offer.compose_offer(d.rng, milestone, d, 3)
+      d.rng = new_rng
+      if #offer > 0 then
+         d.pending_offer           = boon_offer.offer_ids(offer)
+         d.pending_offer_milestone = milestone
+         return
+      end
+      -- Empty offer for this fork — skip and try the next queued milestone.
+   end
+   d.pending_offer_milestone = "" as MilestoneId
+end
+
 local function evaluate_milestones(d: DealState)
    local p = d.players[PLAYER_OWNER_INDEX]
    local set_count = milestones.total_set_count(p.hand)
 
-   -- Fire set milestones for each crossed threshold up to 3.
+   -- Fire set milestones for each crossed threshold up to 3. Each newly
+   -- crossed milestone is queued for fork resolution (S02-T04 flow) in
+   -- addition to firing the listener event (S01).
    while d.set_count_high_water < set_count and d.set_count_high_water < 3 do
       d.set_count_high_water = d.set_count_high_water + 1
       local ev_set: SetFormedEvent = {
@@ -257,6 +286,8 @@ local function evaluate_milestones(d: DealState)
          set_index  = d.set_count_high_water,
       }
       emit_event(d, ev_set as EventData)
+      local m_id: MilestoneId = ("set_" .. tostring(d.set_count_high_water)) as MilestoneId
+      d.pending_forks[#d.pending_forks + 1] = m_id
    end
    -- Track set_count past 3 so debug/UI can show full progression toward 4
    -- (pair-wait ting). No fork exists for set_4.
@@ -275,8 +306,12 @@ local function evaluate_milestones(d: DealState)
          d.reached_ting = true
          local ev_ting: TingReachedEvent = { event_name = "on_ting_reached" }
          emit_event(d, ev_ting as EventData)
+         d.pending_forks[#d.pending_forks + 1] = "ting" as MilestoneId
       end
    end
+
+   -- Materialize the first queued fork into an offer the UI/test can read.
+   materialize_next_offer(d)
 end
 
 -- ── Tile manipulation helpers ──────────────────────────────────────────────
@@ -517,6 +552,9 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
       set_count_high_water     = 0,
       reached_ting             = false,
       declined_boons_this_deal = {},
+      pending_forks            = {},
+      pending_offer            = {},
+      pending_offer_milestone  = "" as MilestoneId,
    }
 end
 
@@ -641,6 +679,15 @@ function M.use_effect_action(player_index: integer, active_effect_id: string, ti
    return a as DealAction
 end
 
+function M.pick_boon_offer(player_index: integer, boon_id: string): DealAction
+   local a: PickBoonOfferAction = {
+      kind         = "pick_boon_offer",
+      player_index = player_index,
+      boon_id      = boon_id,
+   }
+   return a as DealAction
+end
+
 -- ── Draw ──────────────────────────────────────────────────────────────────
 
 local function handle_draw(deal: DealState, action: DrawAction): DealTransition
@@ -649,6 +696,12 @@ local function handle_draw(deal: DealState, action: DrawAction): DealTransition
    end
    if action.player_index ~= deal.current_player then
       return err(deal, "draw: wrong player " .. tostring(action.player_index) .. ", expected " .. tostring(deal.current_player))
+   end
+   -- Plan §357: mandatory pick. If a fork offer is materialized for the
+   -- player, they must resolve it before drawing again. (Opponents draw
+   -- normally; only the boon owner is gated.)
+   if action.player_index == PLAYER_OWNER_INDEX and #deal.pending_offer > 0 then
+      return err(deal, "draw: must resolve pending boon offer first (milestone " .. (deal.pending_offer_milestone as string) .. ")")
    end
    if wall_mod.remaining(deal.wall) == 0 then
       local d = copy_deal(deal)
@@ -1397,6 +1450,41 @@ end
 
 -- ── Opening phase actions ─────────────────────────────────────────────────
 
+-- ── Boon-offer pick (M2-S02-T04) ──────────────────────────────────────────
+--
+-- Resolves the head fork offer materialized on DealState. The picked boon
+-- is added to deal.active_boons (deal-scoped); the other offered ids are
+-- appended to declined_boons_this_deal so they cannot reappear this deal.
+-- After the pick resolves, the next queued fork (if any) is materialized
+-- automatically so the UI/test can chain picks without engine bookkeeping.
+
+local function handle_pick_boon_offer(deal: DealState, action: PickBoonOfferAction): DealTransition
+   if #deal.pending_offer == 0 then
+      return err(deal, "pick_boon_offer: no offer is currently pending")
+   end
+   if action.player_index ~= PLAYER_OWNER_INDEX then
+      return err(deal, "pick_boon_offer: only the boon owner may pick")
+   end
+   local in_offer = false
+   for _, id in ipairs(deal.pending_offer) do
+      if id == action.boon_id then in_offer = true; break end
+   end
+   if not in_offer then
+      return err(deal, "pick_boon_offer: boon_id not in current offer: " .. action.boon_id)
+   end
+
+   local d = copy_deal(deal)
+   local ok = boon_offer.accept_offer(d, d.pending_offer, d.pending_offer_milestone, action.boon_id)
+   if not ok then
+      return err(deal, "pick_boon_offer: accept_offer rejected the pick (internal)")
+   end
+   d.pending_offer           = {}
+   d.pending_offer_milestone = "" as MilestoneId
+   materialize_next_offer(d)
+
+   return ok_t(d, { ev("boon_picked", "player picked " .. action.boon_id) })
+end
+
 local function handle_confirm_opening(deal: DealState, action: ConfirmOpeningAction): DealTransition
    if (deal.phase as string) ~= "opening_actions" then
       return err(deal, "confirm_opening requires opening_actions phase")
@@ -1508,6 +1596,8 @@ function M.apply_action(deal: DealState, action: DealAction): DealTransition
       return handle_discard_opening_surplus(deal, action as DiscardOpeningSurplusAction)
    elseif kind == "use_effect_action" then
       return handle_use_effect_action(deal, action as UseEffectAction)
+   elseif kind == "pick_boon_offer" then
+      return handle_pick_boon_offer(deal, action as PickBoonOfferAction)
    else
       return err(deal, "apply_action: unknown action kind: " .. kind)
    end
