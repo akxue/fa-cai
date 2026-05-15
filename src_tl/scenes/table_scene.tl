@@ -1636,6 +1636,10 @@ local function on_draw()
    local info_strip_h = 26
    info_panels.draw_boon_strip(state.deal, 1, boon_x, bar_y, boon_w, info_strip_h)
    info_panels.draw_known_wall(state.deal, 1, wall_x, bar_y, wall_w, info_strip_h)
+   -- M2 debug: milestone progress strip sits directly below the boon row.
+   if bar_h >= info_strip_h * 2 + 4 then
+      info_panels.draw_milestone_status(state.deal, boon_x, bar_y + info_strip_h + 4, boon_w, info_strip_h)
+   end
 
    -- Action prompt fills the gap between boons and known-wall, drawn as
    -- a horizontal button row (existing vertical-list layout overflows
