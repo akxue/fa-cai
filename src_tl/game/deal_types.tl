@@ -99,8 +99,8 @@ global record DealState
    -- head of the queue is materialized into pending_offer + the milestone
    -- field; the player must PickBoonOffer before resuming normal play.
    pending_forks:            {MilestoneId}              -- FIFO queue
-   pending_offer:            {string}                   -- boon ids currently offered
-   pending_offer_milestone:  MilestoneId                -- milestone the current offer resolves
+   pending_offer:            {string}                   -- boon ids currently offered; empty == no offer
+   pending_offer_milestone:  MilestoneId                -- "" iff pending_offer is empty (cleared together)
 end
 
 -- An active effect instance owned by a player (or the deal). Counters live here

@@ -1457,6 +1457,11 @@ end
 -- appended to declined_boons_this_deal so they cannot reappear this deal.
 -- After the pick resolves, the next queued fork (if any) is materialized
 -- automatically so the UI/test can chain picks without engine bookkeeping.
+--
+-- Phase-agnostic by design: a fork modal can pop while the deal sits in
+-- reaction_window, awaiting_action, or awaiting_draw — the §357 mandatory
+-- pick is enforced by handle_draw's gate, not by phase. The pick itself
+-- only depends on pending_offer being non-empty.
 
 local function handle_pick_boon_offer(deal: DealState, action: PickBoonOfferAction): DealTransition
    if #deal.pending_offer == 0 then

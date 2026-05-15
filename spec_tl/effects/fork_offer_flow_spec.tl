@@ -299,4 +299,54 @@ describe("draw gating when an offer is pending", function()
       local tr = engine.apply_action(deal, engine.draw(2))
       assert.is_true(tr.ok, tr.error)
    end)
+
+   it("end-to-end: discard → fork materializes → draw blocked → pick → draw allowed", function()
+      -- Drives the full flow through real engine actions rather than
+      -- injecting pending_offer state. Catches regressions in the chain
+      -- between evaluate_milestones, materialize_next_offer, and the
+      -- handle_draw gate.
+      local concealed = tiles({
+         {"east_a","east"}, {"east_b","east"}, {"east_c","east"},
+         {"south_a","south"}, {"west_a","west"}, {"north_a","north"},
+         {"fa_cai_a","fa_cai"}, {"hong_zhong_a","hong_zhong"}, {"bai_ban_a","bai_ban"},
+         {"tiao_5_a","tiao_5"}, {"wan_5_a","wan_5"}, {"bing_5_a","bing_5"},
+         {"tiao_9_a","tiao_9"}, {"wan_1_a","wan_1"},
+      })
+      -- Give the wall a couple of tiles so post-pick draws can succeed
+      -- after the deal cycles back around to player 1.
+      local wall = tiles({
+         {"wan_6_a","wan_6"}, {"wan_7_a","wan_7"}, {"wan_8_a","wan_8"},
+      })
+      local deal = make_deal(concealed, {}, wall)
+
+      -- Step 1: player 1 discards → set_1 milestone fires → offer materializes.
+      local tr_disc = engine.apply_action(deal, engine.discard(1, "wan_1_a" as TileId))
+      assert.is_true(tr_disc.ok, tr_disc.error)
+      assert.are.equal(3, #tr_disc.deal.pending_offer)
+      assert.are.equal("set_1", tr_disc.deal.pending_offer_milestone as string)
+
+      -- Step 2: simulate the deal cycling back to player 1 in awaiting_draw.
+      -- (Skipping the full reaction-window-and-3-opponent-turns dance — those
+      -- paths are exercised by deal_engine_spec; this test focuses on the
+      -- gate.) Set phase + current_player as if the cycle completed.
+      local d_at_draw = tr_disc.deal
+      d_at_draw.phase = "awaiting_draw" as DealPhase
+      d_at_draw.current_player = 1
+
+      -- Step 3: player 1 attempts to draw — must be rejected.
+      local tr_blocked = engine.apply_action(d_at_draw, engine.draw(1))
+      assert.is_false(tr_blocked.ok)
+      assert.is_truthy(tr_blocked.error:find("pending boon offer"))
+
+      -- Step 4: player resolves the offer with a valid pick.
+      local pick_id = d_at_draw.pending_offer[1]
+      local tr_pick = engine.apply_action(d_at_draw, engine.pick_boon_offer(1, pick_id))
+      assert.is_true(tr_pick.ok, tr_pick.error)
+      assert.are.equal(0, #tr_pick.deal.pending_offer)
+      assert.are.equal(1, #tr_pick.deal.active_boons)
+
+      -- Step 5: the draw that was blocked before now succeeds.
+      local tr_draw = engine.apply_action(tr_pick.deal, engine.draw(1))
+      assert.is_true(tr_draw.ok, tr_draw.error)
+   end)
 end)
