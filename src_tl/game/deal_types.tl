@@ -92,6 +92,15 @@ global record DealState
    set_count_high_water: integer                       -- highest set count reached this deal (M2-S01)
    reached_ting:         boolean                       -- ting milestone fired this deal (M2-S01)
    declined_boons_this_deal: {string}                  -- boon ids declined at any fork this deal (M2-S02)
+
+   -- ── Fork-offer flow (M2-S02-T04) ──────────────────────────────────────
+   --
+   -- pending_forks queues milestone ids fired but not yet resolved. The
+   -- head of the queue is materialized into pending_offer + the milestone
+   -- field; the player must PickBoonOffer before resuming normal play.
+   pending_forks:            {MilestoneId}              -- FIFO queue
+   pending_offer:            {string}                   -- boon ids currently offered; empty == no offer
+   pending_offer_milestone:  MilestoneId                -- "" iff pending_offer is empty (cleared together)
 end
 
 -- An active effect instance owned by a player (or the deal). Counters live here
@@ -109,13 +118,17 @@ end
 
 -- ── M2 boon instance state (D012) ─────────────────────────────────────────
 --
--- ActiveBoon and AcquisitionPoint live here (alongside ActiveEffectState)
--- because they are domain state stored on DealState/RunState. The M2 boon
--- system (effects.boon_types) extends behavior on top of these records but
--- the records themselves are part of the game domain.
+-- ActiveBoon, AcquisitionPoint, and MilestoneId live here (alongside
+-- ActiveEffectState) because they are domain state stored on
+-- DealState/RunState. The M2 boon system (effects.boon_types) extends
+-- behavior on top of these records but the records themselves are part of
+-- the game domain.
 
 global type AcquisitionPoint = string
 -- "starter" | "set_1" | "set_2" | "set_3" | "ting" | "carried"
+
+global type MilestoneId = string
+-- "starter" | "set_1" | "set_2" | "set_3" | "ting"
 
 global record ActiveBoon
    boon_id:       string
@@ -244,6 +257,12 @@ end
 global record ConfirmOpeningAction
    kind:         string   -- "confirm_opening"
    player_index: integer
+end
+
+global record PickBoonOfferAction
+   kind:         string   -- "pick_boon_offer"
+   player_index: integer
+   boon_id:      string   -- must be one of deal.pending_offer
 end
 
 -- ── Events ────────────────────────────────────────────────────────────────

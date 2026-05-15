@@ -57,6 +57,9 @@ local function empty_deal(): DealState
       set_count_high_water     = 0,
       reached_ting             = false,
       declined_boons_this_deal = {},
+      pending_forks            = {},
+      pending_offer            = {},
+      pending_offer_milestone  = "" as MilestoneId,
    }
 end
 
