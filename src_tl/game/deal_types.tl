@@ -89,6 +89,8 @@ global record DealState
    has_last_drawn:       boolean
    effect_states:        {string: ActiveEffectState}  -- M1 effects keyed by active_effect_id
    active_boons:         {ActiveBoon}                 -- M2 boons active for this deal
+   set_count_high_water: integer                       -- highest set count reached this deal (M2-S01)
+   reached_ting:         boolean                       -- ting milestone fired this deal (M2-S01)
 end
 
 -- An active effect instance owned by a player (or the deal). Counters live here

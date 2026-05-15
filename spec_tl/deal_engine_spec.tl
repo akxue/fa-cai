@@ -99,6 +99,8 @@ local function make_deal(
       has_last_drawn           = has_last_drawn,
       effect_states            = {},
       active_boons             = {},
+      set_count_high_water     = 0,
+      reached_ting             = false,
    }
 end
 
@@ -649,6 +651,8 @@ describe("deal_engine", function()
             last_draw_was_supplement = false, last_drawn_tile_id = "tiao_5_d" as TileId, has_last_drawn = true,
             effect_states = {},
             active_boons = {},
+            set_count_high_water = 0,
+            reached_ting = false,
          }
 
          local tr1 = engine.apply_action(d, engine.declare_added_kong(1, "tiao_5_d" as TileId))
@@ -717,6 +721,8 @@ describe("deal_engine", function()
             last_draw_was_supplement = false, last_drawn_tile_id = "tiao_5_d" as TileId, has_last_drawn = true,
             effect_states = {},
             active_boons = {},
+            set_count_high_water = 0,
+            reached_ting = false,
          }
 
          local tr1 = engine.apply_action(d, engine.declare_added_kong(1, "tiao_5_d" as TileId))

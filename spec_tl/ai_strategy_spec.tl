@@ -74,6 +74,8 @@ local function make_deal(p1_concealed: {Tile}, sets: {TileSet}): DealState
       has_last_drawn           = false,
       effect_states            = {},
       active_boons             = {},
+      set_count_high_water     = 0,
+      reached_ting             = false,
    }
 end
 

@@ -82,6 +82,8 @@ local function make_deal(
       has_last_drawn           = false,
       effect_states            = {},
       active_boons             = {},
+      set_count_high_water     = 0,
+      reached_ting             = false,
    }
 end
 

@@ -60,6 +60,15 @@ global record HuEvent
    -- generalize per-seat routing.
 end
 
+global record SetFormedEvent
+   event_name: EventName     -- "on_set_formed"
+   set_index:  integer       -- 1, 2, or 3 — the milestone threshold crossed
+end
+
+global record TingReachedEvent
+   event_name: EventName     -- "on_ting_reached"
+end
+
 global record OpponentDiscardEvent
    event_name:     EventName     -- "on_opponent_discard"
    opponent_index: integer

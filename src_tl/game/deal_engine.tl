@@ -10,13 +10,15 @@ require("game.deal_types")
 require("game.run_state")
 require("effects.effect_types")
 require("effects.boon_types")
-local wall_mod      = require("game.wall")
-local tiles_mod     = require("game.tiles")
-local calls_mod     = require("game.calls")
-local scorer_mod    = require("game.scorer")
-local fx_runner     = require("effects.effect_runner")
-local scoring       = require("game.scoring")
-local boon_registry = require("effects.boon_registry")
+local wall_mod          = require("game.wall")
+local tiles_mod         = require("game.tiles")
+local calls_mod         = require("game.calls")
+local scorer_mod        = require("game.scorer")
+local fx_runner         = require("effects.effect_runner")
+local scoring           = require("game.scoring")
+local boon_registry     = require("effects.boon_registry")
+local milestones        = require("game.milestone_detection")
+local ting_distance_mod = require("game.ting_distance")
 
 local M = {}
 
@@ -166,6 +168,8 @@ local function copy_deal(d: DealState): DealState
       has_last_drawn           = d.has_last_drawn,
       effect_states            = copy_effect_states(d.effect_states),
       active_boons             = copy_active_boons(d.active_boons),
+      set_count_high_water     = d.set_count_high_water,
+      reached_ting             = d.reached_ting,
    }
 end
 
@@ -221,6 +225,46 @@ local function emit_opponent_discard_derived(d: DealState, opponent_index: integ
          tile           = tile,
       }
       emit_event(d, ev as EventData)
+   end
+end
+
+-- ── M2-S01 milestone fork evaluation ──────────────────────────────────────
+--
+-- End-of-turn evaluation for the player's hand. Fires on_set_formed for each
+-- newly crossed threshold (1, 2, 3) and on_ting_reached when ting is hit for
+-- the first time this deal. set events fire before ting events when both
+-- cross on the same turn (plan §327).
+--
+-- High-water tracking means thresholds don't re-fire if the player drops
+-- below and climbs back (plan §326). reached_ting is one-shot per deal.
+
+local function evaluate_milestones(d: DealState)
+   local p = d.players[PLAYER_OWNER_INDEX]
+   local set_count = milestones.total_set_count(p.hand)
+
+   -- Fire set milestones for each crossed threshold up to 3.
+   while d.set_count_high_water < set_count and d.set_count_high_water < 3 do
+      d.set_count_high_water = d.set_count_high_water + 1
+      local ev_set: SetFormedEvent = {
+         event_name = "on_set_formed",
+         set_index  = d.set_count_high_water,
+      }
+      emit_event(d, ev_set as EventData)
+   end
+   -- Track set_count past 3 so debug/UI can show full progression toward 4
+   -- (pair-wait ting). No fork exists for set_4.
+   if set_count > d.set_count_high_water then
+      d.set_count_high_water = set_count
+   end
+
+   -- Ting check after set events so set_3 + ting fires in the right order.
+   if not d.reached_ting then
+      local td = ting_distance_mod.ting_distance(p.hand.concealed_tiles, p.hand.sets)
+      if td == -1 then
+         d.reached_ting = true
+         local ev_ting: TingReachedEvent = { event_name = "on_ting_reached" }
+         emit_event(d, ev_ting as EventData)
+      end
    end
 end
 
@@ -459,6 +503,8 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
       has_last_drawn           = false,
       effect_states            = {},
       active_boons             = {},
+      set_count_high_water     = 0,
+      reached_ting             = false,
    }
 end
 
@@ -659,6 +705,7 @@ local function handle_discard(deal: DealState, action: DiscardAction): DealTrans
       local ev_disc: PlayerDiscardEvent = { event_name = "on_player_discard", tile = tile_obj }
       emit_event(d, ev_disc as EventData)
       emit_player_discard_derived(d, tile_obj)
+      evaluate_milestones(d)
    else
       local ev_disc: OpponentDiscardEvent = {
          event_name     = "on_opponent_discard",
