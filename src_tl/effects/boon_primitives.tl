@@ -65,6 +65,10 @@ end
 function M.discard_and_redraw(ctx: BoonContext): Tile
    local hand = ctx.deal.players[ctx.player_index].hand
    assert(#hand.concealed_tiles > 0, "discard_and_redraw: empty concealed hand")
+   -- Validate wall before mutating hand so an empty-wall failure does not
+   -- leave the deal in an inconsistent split state (trailing already moved
+   -- to discards with no replacement draw).
+   assert(wall_mod.remaining(ctx.deal.wall) > 0, "discard_and_redraw: wall is empty")
    local trailing = hand.concealed_tiles[#hand.concealed_tiles]
    hand.concealed_tiles[#hand.concealed_tiles] = nil
    hand.discards[#hand.discards + 1] = trailing
@@ -86,6 +90,9 @@ function M.swap_hand_for_wall(ctx: BoonContext, hand_tile_id: TileId): Tile
       if t.tile_id == hand_tile_id then idx = i; break end
    end
    assert(idx > 0, "swap_hand_for_wall: tile_id not in concealed hand: " .. hand_tile_id)
+   -- Validate wall before mutating hand so an empty-wall failure does not
+   -- leave the removed tile orphaned in discards with no replacement draw.
+   assert(wall_mod.remaining(ctx.deal.wall) > 0, "swap_hand_for_wall: wall is empty")
    local removed = hand.concealed_tiles[idx]
    table.remove(hand.concealed_tiles, idx)
    hand.discards[#hand.discards + 1] = removed
@@ -103,6 +110,7 @@ end
 -- 13+kongs invariant when emission wires up in T04.
 function M.extra_draw(ctx: BoonContext): Tile
    local hand = ctx.deal.players[ctx.player_index].hand
+   assert(wall_mod.remaining(ctx.deal.wall) > 0, "extra_draw: wall is empty")
    local draw = wall_mod.draw_front(ctx.deal.wall)
    ctx.deal.wall = draw.wall
    hand.concealed_tiles[#hand.concealed_tiles + 1] = draw.tile
@@ -127,15 +135,20 @@ end
 -- ── 7. take_from_discard_pile ─────────────────────────────────────────────
 -- Removes the named tile from pile_owner's discard pile and adds it to the
 -- caller's concealed hand. Per plan §223, age restriction varies by pile
--- (own: any age; opponent: ≥5 table-wide turns). Age tracking will land
--- with the Salvage Hand boon in S04; for S00 we accept min_age_turns and
--- enforce the lookup but do not (yet) maintain a per-tile age log.
+-- (own: any age; opponent: ≥5 table-wide turns).
+--
+-- TODO(S04 — Salvage Hand): age enforcement is NOT implemented in S00. The
+-- `min_age_turns` parameter is accepted to keep the signature stable but is
+-- ignored. When Salvage Hand lands, the engine must track per-tile discard
+-- ages on each player's discard pile (or a sidecar log) and this primitive
+-- must reject takes that violate the age threshold.
 function M.take_from_discard_pile(
    ctx: BoonContext,
    pile_owner: integer,
    tile_id: TileId,
-   _min_age_turns: integer
+   min_age_turns: integer
 ): Tile
+   local _ = min_age_turns   -- suppress unused-arg warning; enforced in S04
    local pile = ctx.deal.players[pile_owner].hand.discards
    local idx = -1
    for i, t in ipairs(pile) do

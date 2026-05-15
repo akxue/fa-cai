@@ -358,6 +358,18 @@ describe("boon_registry.emit", function()
       registry.reset()
    end)
 
+   it("silently skips active boons whose id is not in the catalog", function()
+      -- A stale ActiveBoon (e.g., loaded from a save where the catalog has
+      -- since changed) must not throw — emit should treat unknown ids as
+      -- no-ops so the deal keeps running.
+      local active = context.new_active("not_registered", "starter" as AcquisitionPoint)
+      local deal   = make_deal({}, {}, {{},{},{}})
+      local ev: PlayerDrawEvent = { event_name = "on_player_draw", tile = tile("a","tiao_1") }
+      assert.has_no.errors(function()
+         registry.emit(deal, {active}, 1, ev as EventData)
+      end)
+   end)
+
    it("runs a matching listener and observes side effects on ActiveBoon state", function()
       local fired = 0
       local boon: Boon = {
