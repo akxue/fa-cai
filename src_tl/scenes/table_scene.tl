@@ -26,6 +26,8 @@ local info_panels   = require("ui.info_panels")
 local clickable_mod = require("ui.clickable")
 local panel         = require("ui.panel")
 local button        = require("ui.button")
+local boon_card     = require("ui.boon_card")
+local m2_boons      = require("content.m2_boons")
 local scoring       = require("game.scoring")
 local scene_stack   = require("app.scene_stack")
 local assets        = require("app.assets")
@@ -700,6 +702,91 @@ local function on_update(dt: number)
    if state.step_mode then state.wait_for_step = true end
 end
 
+-- ── Fork modal (M2-S02-T05) ──────────────────────────────────────────────
+--
+-- Drawn over the table whenever deal.pending_offer is non-empty. Blocks
+-- table input until the player resolves the offer via PickBoonOfferAction.
+-- fork_modal_active() routes input to the modal's clickables/keys.
+
+local fork_clickables: {Clickable} = {}
+
+local function fork_modal_active(): boolean
+   if state.deal == nil then return false end
+   return #state.deal.pending_offer > 0
+end
+
+local function pick_fork_boon(boon_id: string)
+   local tr = engine.apply_action(state.deal, engine.pick_boon_offer(1, boon_id))
+   if not tr.ok then
+      push_log("err", "pick_boon_offer failed: " .. tr.error)
+      return
+   end
+   state.deal = tr.deal
+   push_log("sys", "picked " .. boon_id)
+   for _, e in ipairs(tr.events) do push_log("ev", e.message) end
+   state.ticks = state.ticks + 1
+end
+
+local function milestone_label(m: MilestoneId): string
+   local s = m as string
+   if s == "set_1" then return "Set 1 reached"
+   elseif s == "set_2" then return "Set 2 reached"
+   elseif s == "set_3" then return "Set 3 reached"
+   elseif s == "ting"  then return "Ting reached"
+   end
+   -- Only set_1/2/3/ting reach the modal — evaluate_milestones never
+   -- queues "starter" or "carried" into pending_forks. Hitting this
+   -- branch indicates a programmer error upstream, not a recoverable
+   -- runtime condition.
+   error("milestone_label: unexpected milestone id: " .. s)
+end
+
+local function draw_fork_modal()
+   local sw = love.graphics.getWidth()
+   local sh = love.graphics.getHeight()
+   love.graphics.setColor(0.0, 0.0, 0.0, 0.70)
+   love.graphics.rectangle("fill", 0, 0, sw, sh)
+
+   local CARD_W <const> = 240
+   local CARD_H <const> = 180
+   local CARD_GAP <const> = 24
+
+   local n = #state.deal.pending_offer
+   local total_w = n * CARD_W + (n - 1) * CARD_GAP
+   local x0 = (sw - total_w) / 2
+   local y0 = sh / 2 - CARD_H / 2
+
+   love.graphics.setColor(0.95, 0.95, 0.95, 1.0)
+   love.graphics.printf(
+      milestone_label(state.deal.pending_offer_milestone) .. " — choose a boon",
+      0, y0 - 64, sw, "center"
+   )
+   love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
+   love.graphics.printf("mandatory pick — click or press 1 / 2 / 3", 0, y0 - 40, sw, "center")
+
+   fork_clickables = {}
+   for i, boon_id in ipairs(state.deal.pending_offer) do
+      local boon = m2_boons.find(boon_id)
+      if boon ~= nil then
+         local view: BoonCardView = {
+            x = x0 + (i - 1) * (CARD_W + CARD_GAP),
+            y = y0,
+            w = CARD_W,
+            h = CARD_H,
+            boon     = boon,
+            selected = false,
+            hotkey   = tostring(i),
+         }
+         boon_card.draw(view)
+         local picked_id = boon_id
+         fork_clickables[#fork_clickables + 1] = {
+            x = view.x, y = view.y, w = view.w, h = view.h,
+            callback = function() pick_fork_boon(picked_id) end,
+         }
+      end
+   end
+end
+
 local function on_mousepressed(x: number, y: number, mouse_button: integer)
    if mouse_button ~= 1 then return end
    if state.deal == nil then return end
@@ -707,6 +794,18 @@ local function on_mousepressed(x: number, y: number, mouse_button: integer)
       -- Click anywhere to dismiss the modal. Underlying scene clickables
       -- are blocked while it's up.
       state.discards_modal_open = false
+      return
+   end
+   if fork_modal_active() then
+      -- Only the fork cards are clickable. Misses inside the modal area
+      -- do nothing (modal is mandatory — no dismiss-by-misclick).
+      -- fork_clickables is refreshed inside draw_fork_modal each frame.
+      -- If a click arrives before the first draw after a state change
+      -- (theoretical frame-ordering quirk), the rects could be stale —
+      -- engine.apply_action(pick_boon_offer) then rejects the unknown
+      -- boon_id with a logged error, so the worst case is no-op + log.
+      local hit = clickable_mod.find(fork_clickables, x, y)
+      if hit ~= nil then hit.callback() end
       return
    end
    local hit = clickable_mod.find(state.clickables, x, y)
@@ -720,6 +819,16 @@ local function on_keypressed(key: string)
    -- modal is up.
    if state.discards_modal_open then
       state.discards_modal_open = false
+      return
+   end
+   if fork_modal_active() then
+      -- Only 1/2/3 (and equivalents) pick from the offer. Other keys
+      -- (including escape) are absorbed — the pick is mandatory.
+      if key == "1" or key == "2" or key == "3" then
+         local idx = tonumber(key) as integer
+         local boon_id = state.deal.pending_offer[idx]
+         if boon_id ~= nil then pick_fork_boon(boon_id) end
+      end
       return
    end
    if key == "escape" then
@@ -1679,6 +1788,9 @@ local function on_draw()
 
    if state.discards_modal_open then
       draw_discards_modal()
+   end
+   if fork_modal_active() then
+      draw_fork_modal()
    end
 end
 
