@@ -82,6 +82,28 @@ local function wall_by_id(d: DealState): {string: Tile}
    return by_id
 end
 
+-- Milestone progress (M2-S01 debug). One-line status showing player 1's
+-- set-count high-water and ting-reached flag. Useful during playtest to
+-- verify fork events fire at the right boundary.
+function M.draw_milestone_status(d: DealState, x: number, y: number, w: number, h: number)
+   panel.draw(x, y, w, h, "Milestones")
+
+   local set_count = d.set_count_high_water
+   if set_count > 3 then set_count = 3 end   -- display caps at 3; no set_4 fork
+
+   love.graphics.setColor(0.85, 0.85, 0.90, 1.0)
+   local sets_label = "sets " .. tostring(set_count) .. " / 3"
+   love.graphics.print(sets_label, x + 100, y + 4)
+
+   local ting_label = d.reached_ting and "ting YES" or "ting —"
+   if d.reached_ting then
+      love.graphics.setColor(0.40, 0.85, 0.40, 1.0)
+   else
+      love.graphics.setColor(0.55, 0.55, 0.60, 1.0)
+   end
+   love.graphics.print(ting_label, x + 200, y + 4)
+end
+
 function M.draw_known_wall(d: DealState, owner_index: integer, x: number, y: number, w: number, h: number)
    panel.draw(x, y, w, h, "Known Wall")
 
