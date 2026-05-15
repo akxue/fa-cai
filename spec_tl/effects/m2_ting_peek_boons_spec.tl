@@ -101,6 +101,18 @@ local function open_peng(kind_id: string): TileSet
    }
 end
 
+local function open_kong(kind_id: string): TileSet
+   return {
+      kind        = "kong" as TileSetKind,
+      visibility  = "open" as SetVisibility,
+      tiles       = {
+         tile(kind_id .. "_a", kind_id), tile(kind_id .. "_b", kind_id),
+         tile(kind_id .. "_c", kind_id), tile(kind_id .. "_d", kind_id),
+      },
+      called_from = 2,
+   }
+end
+
 local function concealed_kong(kind_id: string): TileSet
    return {
       kind        = "kong" as TileSetKind,
@@ -214,7 +226,7 @@ describe("M2 boon: closed_eye", function()
       assert.is_true(active.flags["active"])
    end)
 
-   it("does not activate if there is any open set", function()
+   it("does not activate if there is any open set (open peng)", function()
       local concealed = tiles({{"tiao_5_a","tiao_5"}})
       local sets: {TileSet} = { open_peng("east") }
       local deal = make_deal(concealed, sets, tiles({{"wan_9_a","wan_9"}}))
@@ -228,7 +240,24 @@ describe("M2 boon: closed_eye", function()
       assert.are.equal(0, #deal.players[1].known_wall_tile_ids)
    end)
 
-   it("peeks every draw while active (multiple draws accumulate)", function()
+   it("does not activate if there is any open set (open kong)", function()
+      -- Same disqualification path as open peng, exercised via the kong
+      -- variant. Locks in the contract that all visibility="open" set
+      -- kinds disqualify Closed Eye, not just pengs.
+      local concealed = tiles({{"tiao_5_a","tiao_5"}})
+      local sets: {TileSet} = { open_kong("east") }
+      local deal = make_deal(concealed, sets, tiles({{"wan_9_a","wan_9"}}))
+      local active = context.new_active("closed_eye", "ting" as AcquisitionPoint)
+      deal.active_boons[#deal.active_boons + 1] = active
+
+      fire_ting(deal, deal.active_boons)
+      assert.is_falsy(active.flags["active"])
+   end)
+
+   it("peeks every draw while active (distinct wall fronts accumulate)", function()
+      -- Mutate the wall front between draws so each peek sees a different
+      -- tile — proves the boon fires per-draw, not just deduplicates the
+      -- same front on repeated emissions.
       local concealed = tiles({{"tiao_1_a","tiao_1"}})
       local wall = tiles({{"wan_9_a","wan_9"}, {"wan_8_a","wan_8"}, {"wan_7_a","wan_7"}})
       local deal = make_deal(concealed, {}, wall)
@@ -237,10 +266,19 @@ describe("M2 boon: closed_eye", function()
 
       fire_ting(deal, deal.active_boons)
       fire_player_draw(deal, deal.active_boons, "wan_9")
-      -- mark_wall_known dedupes; subsequent draws against the same wall
-      -- front don't grow the list. (In a real deal the wall would
-      -- consume between draws and the front would change.)
-      fire_player_draw(deal, deal.active_boons, "wan_9")
       assert.are.equal(1, #deal.players[1].known_wall_tile_ids)
+      assert.are.equal("wan_9_a", deal.players[1].known_wall_tile_ids[1] as string)
+
+      -- Simulate the engine consuming the wall front (real draw would
+      -- shift it). Now the next peek sees a different tile.
+      table.remove(deal.wall.tiles, 1)
+      fire_player_draw(deal, deal.active_boons, "wan_8")
+      assert.are.equal(2, #deal.players[1].known_wall_tile_ids)
+      assert.are.equal("wan_8_a", deal.players[1].known_wall_tile_ids[2] as string)
+
+      table.remove(deal.wall.tiles, 1)
+      fire_player_draw(deal, deal.active_boons, "wan_7")
+      assert.are.equal(3, #deal.players[1].known_wall_tile_ids)
+      assert.are.equal("wan_7_a", deal.players[1].known_wall_tile_ids[3] as string)
    end)
 end)
