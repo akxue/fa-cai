@@ -50,6 +50,35 @@ local DRAGON_KINDS: {string: boolean} = {
    fa_cai = true, hong_zhong = true, bai_ban = true,
 }
 
+local HONOR_KINDS: {string: boolean} = {
+   east = true, south = true, west = true, north = true,
+   fa_cai = true, hong_zhong = true, bai_ban = true,
+}
+
+-- Counts honor tiles across a player's concealed tiles + all set tiles
+-- (including kongs and called sets). Used by ting-activated honor boons.
+local function count_honors_in_hand(hand: PlayerHand): integer
+   local n = 0
+   for _, t in ipairs(hand.concealed_tiles) do
+      if HONOR_KINDS[t.kind_id as string] then n = n + 1 end
+   end
+   for _, s in ipairs(hand.sets) do
+      for _, t in ipairs(s.tiles) do
+         if HONOR_KINDS[t.kind_id as string] then n = n + 1 end
+      end
+   end
+   return n
+end
+
+-- Returns true if the player has zero open sets (concealed kongs count
+-- as concealed). Used to detect "concealed ting" for Closed Eye.
+local function is_fully_concealed(hand: PlayerHand): boolean
+   for _, s in ipairs(hand.sets) do
+      if (s.visibility as string) == "open" then return false end
+   end
+   return true
+end
+
 -- ── Effect implementations (S04 — incremental) ───────────────────────────
 --
 -- Each implemented boon converts its `effect` from `noop_effect` to a real
@@ -150,7 +179,7 @@ local function effect_silent_stand(ctx: BoonContext, ev: EventData)
       else
          local n = ctx:get_counter("consecutive_no_call") + 1
          ctx:set_counter("consecutive_no_call", n)
-         if n > 0 and n % 5 == 0 then
+         if n % 5 == 0 then
             ctx:grant_token("mulligan", 1)
          end
       end
@@ -175,6 +204,48 @@ local function effect_concealed_insight(ctx: BoonContext, ev: EventData)
       local n = ctx:get_counter("no_call_discards") + 1
       ctx:set_counter("no_call_discards", n)
       if n % 4 == 0 then
+         mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(1))
+      end
+   end
+end
+
+-- Honor Sanctum (ting, honor): when you reach ting holding 4+ honor
+-- tiles (across concealed + sets), peek 1 wall tile each turn for the
+-- rest of the deal. Two-phase: on on_ting_reached, check the honor
+-- count and latch an `active` flag; thereafter every on_player_draw
+-- peeks one tile while active.
+--
+-- TODO(S07): the `active` flag persists for the rest of the deal but
+-- carry-forward (run-scoped boons crossing deals) must reset it —
+-- otherwise a boon latched in deal N auto-peeks from turn 1 of deal
+-- N+1 without a fresh ting. Same caveat applies to Closed Eye below.
+local function effect_honor_sanctum(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name == "on_ting_reached" then
+      local hand = ctx.deal.players[ctx.player_index].hand
+      if count_honors_in_hand(hand) >= 4 then
+         ctx:set_flag("active", true)
+      end
+   elseif name == "on_player_draw" then
+      if ctx:get_flag("active") then
+         mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(1))
+      end
+   end
+end
+
+-- Closed Eye (ting, concealed): when you reach concealed ting (no open
+-- sets — concealed kongs OK), peek 1 wall tile each turn for the rest
+-- of the deal. Same two-phase latch as Honor Sanctum with a different
+-- activation predicate.
+local function effect_closed_eye(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name == "on_ting_reached" then
+      local hand = ctx.deal.players[ctx.player_index].hand
+      if is_fully_concealed(hand) then
+         ctx:set_flag("active", true)
+      end
+   elseif name == "on_player_draw" then
+      if ctx:get_flag("active") then
          mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(1))
       end
    end
@@ -232,6 +303,18 @@ local BOONS: {Boon} = {
       listens             = {"on_peng", "on_kong", "on_ankan"},
       condition           = always_true,
       effect              = effect_dragon_pulse,
+   },
+   {
+      id                  = "honor_sanctum",
+      cluster             = "honor",
+      name                = "Honor Sanctum",
+      description         = "When you reach ting holding 4+ honor tiles, peek 1 wall tile each turn for the rest of the deal.",
+      eligible_milestones = {"ting"},
+      effect_kind         = "peek",
+      weight              = 1.0,
+      listens             = {"on_ting_reached", "on_player_draw"},
+      condition           = always_true,
+      effect              = effect_honor_sanctum,
    },
 
    -- Suit cluster
@@ -308,6 +391,18 @@ local BOONS: {Boon} = {
       listens             = {"on_player_discard", "on_chi", "on_peng", "on_kong", "on_ankan"},
       condition           = always_true,
       effect              = effect_concealed_insight,
+   },
+   {
+      id                  = "closed_eye",
+      cluster             = "concealed",
+      name                = "Closed Eye",
+      description         = "When you reach concealed ting, peek 1 wall tile each turn for the rest of the deal.",
+      eligible_milestones = {"ting"},
+      effect_kind         = "peek",
+      weight              = 1.0,
+      listens             = {"on_ting_reached", "on_player_draw"},
+      condition           = always_true,
+      effect              = effect_closed_eye,
    },
 }
 
