@@ -22,6 +22,15 @@ local M = {}
 
 local DEFAULT_OFFER_SIZE <const> = 3
 
+-- Starter-offer cluster ordering. Output of compose_starter_offer always
+-- lists Honor first, then Suit, then Concealed (per plan §556 cluster
+-- presentation order). Allocated once at module scope.
+local STARTER_CLUSTERS <const>: {Cluster} = {
+   "honor"     as Cluster,
+   "suit"      as Cluster,
+   "concealed" as Cluster,
+}
+
 -- Looks up the catalog and returns every boon eligible at the given milestone
 -- whose id is NOT in the excluded set. Sorted by id for determinism.
 function M.eligible_at(milestone: MilestoneId, excluded: {string: boolean}): {Boon}
@@ -96,6 +105,34 @@ function M.offer_ids(offer: {Boon}): {string}
    local out: {string} = {}
    for _, b in ipairs(offer) do out[#out + 1] = b.id end
    return out
+end
+
+-- M2-S03: builds the pre-deal starter offer. Selects one starter-eligible
+-- boon per cluster (Honor, Suit, Concealed) — picked uniformly at random
+-- per cluster from the catalog. Output is ordered Honor, Suit, Concealed.
+-- Clusters with no starter-eligible boons are silently skipped (defensive;
+-- the plan calls for exactly one per cluster, so the offer is normally 3).
+function M.compose_starter_offer(rng: RngState): {Boon}, RngState
+   local out: {Boon} = {}
+   local cur = rng
+   for _, cluster in ipairs(STARTER_CLUSTERS) do
+      local candidates: {Boon} = {}
+      for _, b in ipairs(registry.all()) do
+         local is_starter = false
+         for _, m in ipairs(b.eligible_milestones) do
+            if m == "starter" then is_starter = true; break end
+         end
+         if is_starter and b.cluster == cluster then
+            candidates[#candidates + 1] = b
+         end
+      end
+      if #candidates > 0 then
+         local r = rng_mod.next_int(cur, 1, #candidates)
+         out[#out + 1] = candidates[r.value]
+         cur = r.rng
+      end
+   end
+   return out, cur
 end
 
 -- Resolves a pick against the current offer:
