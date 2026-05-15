@@ -246,12 +246,12 @@ describe("milestone fork emission", function()
       assert.are.equal(1, tr.deal.set_count_high_water)
    end)
 
-   it("does not re-fire set_1 when count drops to 0 and climbs back to 1", function()
+   it("does not re-fire set_1 when high_water already at current count", function()
       local active, observed = record_events("set_watcher", {"on_set_formed", "on_ting_reached"})
 
-      -- Setup: player has just discarded into a state where they crossed set_1
-      -- previously (high_water = 1). Then concealed loses the pung and forms
-      -- a new one later. high_water stays at 1; no re-fire.
+      -- Player has high_water=1 (fired set_1 previously) and still holds a
+      -- single pung. End-of-turn evaluation sees set_count == high_water → no
+      -- event.
       local concealed = tiles({
          {"east_a","east"}, {"east_b","east"}, {"east_c","east"},
          {"south_a","south"}, {"west_a","west"}, {"north_a","north"},
@@ -267,6 +267,55 @@ describe("milestone fork emission", function()
       assert.is_true(tr.ok, tr.error)
       assert.are.same({}, observed)  -- no re-fire
       assert.are.equal(1, tr.deal.set_count_high_water)
+   end)
+
+   it("does not re-fire set_1 when the pung breaks and a new one forms across turns", function()
+      -- Plan §326: if max-sets drops below a threshold and later crosses it
+      -- again, the fork does NOT re-trigger. Drive two consecutive discards
+      -- through engine.apply_action — first leaves the deal with one pung
+      -- intact, second breaks it and reforms a different pung. Watcher must
+      -- see exactly one on_set_formed.
+      local active, observed = record_events("set_watcher", {"on_set_formed", "on_ting_reached"})
+
+      -- Turn A: concealed has east-pung intact + filler + 1 discard target.
+      -- After discard, max_sets = 1 → fires set_1.
+      local concealed_a = tiles({
+         {"east_a","east"}, {"east_b","east"}, {"east_c","east"},
+         {"south_a","south"}, {"south_b","south"},
+         {"west_a","west"},  {"north_a","north"},
+         {"fa_cai_a","fa_cai"}, {"hong_zhong_a","hong_zhong"}, {"bai_ban_a","bai_ban"},
+         {"tiao_5_a","tiao_5"}, {"wan_5_a","wan_5"}, {"bing_5_a","bing_5"},
+         {"wan_1_a","wan_1"},  -- discard target
+      })
+      local deal = make_deal_for_p1(concealed_a, {}, {}, {})
+      deal.active_boons[#deal.active_boons + 1] = active
+
+      local tr_a = engine.apply_action(deal, engine.discard(1, "wan_1_a" as TileId))
+      assert.is_true(tr_a.ok, tr_a.error)
+      assert.are.same({"on_set_formed"}, observed)
+      assert.are.equal(1, tr_a.deal.set_count_high_water)
+
+      -- Turn B: break the east-pung by replacing the hand with a south-pung
+      -- only (no east-pung). The set_count is 1 again but high_water stayed
+      -- at 1; no new event should fire even though the "current" set differs.
+      -- We script this by manually mutating the deal between turns (the
+      -- engine doesn't model drawing a tile that splits a pung; this is the
+      -- minimum scaffolding for the invariant test).
+      tr_a.deal.players[1].hand.concealed_tiles = tiles({
+         {"south_a","south"}, {"south_b","south"}, {"south_c","south"},
+         {"west_a","west"},  {"north_a","north"},
+         {"fa_cai_a","fa_cai"}, {"hong_zhong_a","hong_zhong"}, {"bai_ban_a","bai_ban"},
+         {"tiao_5_a","tiao_5"}, {"wan_5_a","wan_5"}, {"bing_5_a","bing_5"},
+         {"tiao_9_a","tiao_9"}, {"wan_3_a","wan_3"},
+         {"wan_4_a","wan_4"},  -- new discard target
+      })
+      tr_a.deal.phase = "awaiting_action" as DealPhase
+      tr_a.deal.current_player = 1
+
+      local tr_b = engine.apply_action(tr_a.deal, engine.discard(1, "wan_4_a" as TileId))
+      assert.is_true(tr_b.ok, tr_b.error)
+      assert.are.same({"on_set_formed"}, observed)  -- still exactly one
+      assert.are.equal(1, tr_b.deal.set_count_high_water)
    end)
 
    it("fires set_1, set_2, set_3, then on_ting_reached in order for pair-wait ting", function()

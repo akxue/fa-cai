@@ -40,9 +40,12 @@ local function copy_counts(c: {string:integer}): {string:integer}
 end
 
 local function sorted_kinds(counts: {string:integer}): {string}
+   -- Caller (max_concealed_sets) builds counts from a tile list, so every
+   -- entry is non-zero by construction. Sorting all keys is sufficient;
+   -- max_sets_recursive advances past zero-count entries on its own.
    local out: {string} = {}
-   for k, v in pairs(counts) do
-      if v > 0 then out[#out + 1] = k end
+   for k in pairs(counts) do
+      out[#out + 1] = k
    end
    table.sort(out)
    return out

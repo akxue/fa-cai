@@ -260,7 +260,11 @@ local function evaluate_milestones(d: DealState)
    -- Ting check after set events so set_3 + ting fires in the right order.
    if not d.reached_ting then
       local td = ting_distance_mod.ting_distance(p.hand.concealed_tiles, p.hand.sets)
-      if td == -1 then
+      -- Use `<= -1` defensively: ting_distance returns -1 for "in ting" on a
+      -- post-discard 13-tile hand; if this helper ever runs on a 14-tile
+      -- mid-turn snapshot it can return -2 ("already won"). Either condition
+      -- means ting has been reached for milestone purposes.
+      if td <= -1 then
          d.reached_ting = true
          local ev_ting: TingReachedEvent = { event_name = "on_ting_reached" }
          emit_event(d, ev_ting as EventData)
