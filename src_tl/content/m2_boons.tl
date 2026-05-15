@@ -51,6 +51,29 @@ local DRAGON_KINDS: {string: boolean} = {
 }
 
 -- ── Effect implementations (S04 — incremental) ───────────────────────────
+--
+-- Each implemented boon converts its `effect` from `noop_effect` to a real
+-- implementation here. The remaining 20 boons in the audit library follow
+-- in subsequent slices/PRs.
+
+-- Honor's Eye (set_1, honor): on every honor draw, peek the next wall tile
+-- and add it to the player's known-wall view. Result surfaces in the
+-- Known Wall info strip rendered by ui.info_panels.
+local function effect_honors_eye(ctx: BoonContext, _ev: EventData)
+   mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(1))
+end
+
+-- Hidden Path (starter, concealed): grants 1 mulligan + 1 wall-peek token
+-- at deal start.
+--
+-- TODO (P14 gating): per plan §486 / §515, tokens should be spendable
+-- only while the player has made no calls. The gate is NOT enforced
+-- today — boon_primitives.spend_token deducts unconditionally. The gate
+-- will land alongside the spend-action UI surface in a later S04 slice.
+local function effect_hidden_path(ctx: BoonContext, _ev: EventData)
+   ctx:grant_token("mulligan", 1)
+   ctx:grant_token("peek", 1)
+end
 
 -- Honor Sense (set_1 / set_2 flex, honor): every 3rd opponent honor
 -- discard you observe, peek the next 2 wall tiles.
@@ -102,7 +125,7 @@ local BOONS: {Boon} = {
       weight              = 1.0,
       listens             = {"on_honor_drawn"},
       condition           = always_true,
-      effect              = noop_effect,
+      effect              = effect_honors_eye,
    },
    {
       id                  = "honor_sense",
@@ -166,7 +189,7 @@ local BOONS: {Boon} = {
       weight              = 1.0,
       listens             = {"on_deal_start"},
       condition           = always_true,
-      effect              = noop_effect,
+      effect              = effect_hidden_path,
    },
    {
       id                  = "silent_march",
