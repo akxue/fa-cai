@@ -190,6 +190,28 @@ describe("boon_offer.compose_offer", function()
       local out, _ = offer.compose_offer(rng_mod.from_seed(42), "starter" as MilestoneId, d, 3)
       assert.are.equal(0, #out)
    end)
+
+   it("returns count = 1 boons when asked for one", function()
+      local d = empty_deal()
+      local out, _ = offer.compose_offer(rng_mod.from_seed(42), "starter" as MilestoneId, d, 1)
+      assert.are.equal(1, #out)
+   end)
+
+   it("clamps to pool size when count exceeds available (§369 exhaustion fallback)", function()
+      local d = empty_deal()
+      -- Decline one starter so only 2 remain eligible. Ask for 5.
+      d.declined_boons_this_deal[#d.declined_boons_this_deal + 1] = "honors_gift"
+      local out, _ = offer.compose_offer(rng_mod.from_seed(7), "starter" as MilestoneId, d, 5)
+      assert.are.equal(2, #out)
+   end)
+
+   it("returns empty offer when count is 0 or negative", function()
+      local d = empty_deal()
+      local zero_out, _ = offer.compose_offer(rng_mod.from_seed(7), "starter" as MilestoneId, d, 0)
+      assert.are.equal(0, #zero_out)
+      local neg_out, _ = offer.compose_offer(rng_mod.from_seed(7), "starter" as MilestoneId, d, -3)
+      assert.are.equal(0, #neg_out)
+   end)
 end)
 
 describe("boon_offer.accept_offer", function()

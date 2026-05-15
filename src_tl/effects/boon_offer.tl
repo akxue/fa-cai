@@ -14,8 +14,9 @@ require("core.rng")
 require("game.deal_types")
 require("effects.boon_types")
 
-local rng_mod  = require("core.rng")
-local registry = require("effects.boon_registry")
+local rng_mod      = require("core.rng")
+local registry     = require("effects.boon_registry")
+local boon_context = require("effects.boon_context")
 
 local M = {}
 
@@ -61,7 +62,10 @@ function M.compose_offer(
    deal:      DealState,
    count:     integer
 ): {Boon}, RngState
-   if count <= 0 then count = DEFAULT_OFFER_SIZE end
+   -- A non-positive count is almost always a caller bug. Return an empty
+   -- offer rather than silently falling back to DEFAULT_OFFER_SIZE — that
+   -- silent conversion was a footgun flagged in PR #18 review.
+   if count <= 0 then return {}, rng end
    local excluded = build_excluded(deal)
    local pool     = M.eligible_at(milestone, excluded)
 
@@ -110,13 +114,8 @@ function M.accept_offer(
    end
    if not found then return false end
 
-   deal.active_boons[#deal.active_boons + 1] = {
-      boon_id     = picked_boon_id,
-      acquired_at = milestone as AcquisitionPoint,
-      counters    = {},
-      flags       = {},
-      tokens      = {},
-   }
+   deal.active_boons[#deal.active_boons + 1] =
+      boon_context.new_active(picked_boon_id, milestone as AcquisitionPoint)
    for _, id in ipairs(offer) do
       if id ~= picked_boon_id then
          deal.declined_boons_this_deal[#deal.declined_boons_this_deal + 1] = id
