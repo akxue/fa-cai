@@ -43,13 +43,21 @@ end
 global record CallEvent
    event_name:    EventName     -- "on_chi" | "on_peng" | "on_kong" | "on_ankan"
    tile_set:      TileSet
-   source_player: integer       -- -1 for ankan (no discarder)
+   source_player: integer       -- discarder seat for chi/peng/open-kong;
+                                -- -1 for self-sourced (ankan, added kong)
+   kong_kind:     string        -- "open" | "added" — meaningful only on on_kong;
+                                -- empty string ("") for chi/peng/ankan
 end
 
 global record HuEvent
    event_name: EventName     -- "on_hu"
    fan_total:  integer
-   -- HandSnapshot is intentionally deferred; scoring shape lives in DealResult
+   -- HandSnapshot is intentionally deferred; scoring shape lives in DealResult.
+   --
+   -- M1 contract: on_hu fires only when PLAYER_OWNER_INDEX wins (zi mo, on
+   -- discard, or qiang gang). on_deal_end fires regardless of winner. This
+   -- asymmetry is deliberate for M1's single-seat boon ownership; M3+ may
+   -- generalize per-seat routing.
 end
 
 global record OpponentDiscardEvent
@@ -88,6 +96,9 @@ end
 global record TurnEvent
    event_name: EventName     -- "on_turn_start" | "on_turn_end"
    turn_index: integer
+   -- Declared for forward compatibility (plan §186-187). Not emitted by the
+   -- engine in S00 — wired alongside set/ting milestones in a follow-up
+   -- when a boon actually depends on per-turn lifecycle events.
 end
 
 global record DealLifecycleEvent

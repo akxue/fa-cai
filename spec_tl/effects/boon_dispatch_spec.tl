@@ -11,6 +11,13 @@ local rng_mod    = require("core.rng")
 local primitives = require("effects.boon_primitives")
 local context    = require("effects.boon_context")
 local registry   = require("effects.boon_registry")
+local notation   = require("support.hand_notation")
+
+local function parse(s: string): {Tile}
+   local r = notation.parse(s)
+   assert.is_true(r.ok, "notation error: " .. r.error)
+   return r.tiles
+end
 
 -- ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -606,5 +613,57 @@ describe("M2-S00 acceptance", function()
       local tr = engine.apply_action(deal, engine.draw(1))
       assert.is_true(tr.ok, tr.error)
       assert.are.equal(1, honors_seen)
+   end)
+
+   it("on_deal_start fires once for a run-scoped boon when new_deal_with_run is called", function()
+      local started = 0
+      local boon: Boon = {
+         id = "start_seer", cluster = "honor", name = "SS",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_deal_start"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, _e: EventData) started = started + 1 end,
+      }
+      registry.register(boon)
+
+      local rs = run_state.new_run(rng_mod_local.from_seed(13))
+      rs.active_boons[#rs.active_boons + 1] = context.new_active("start_seer", "starter" as AcquisitionPoint)
+      local _ = engine.new_deal_with_run(rng_mod_local.from_seed(13), rs)
+      assert.are.equal(1, started)
+   end)
+
+   it("on_hu fires for a zi-mo win through handle_hu", function()
+      local hus_seen = 0
+      local last_fan = 0
+      local boon: Boon = {
+         id = "hu_seer", cluster = "honor", name = "HuS",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_hu"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, ev: EventData)
+            hus_seen = hus_seen + 1
+            local hu_ev = ev as HuEvent
+            last_fan = hu_ev.fan_total
+         end,
+      }
+      registry.register(boon)
+
+      -- Pure suit (清一色) ping-hu: 14 tiles of bing forming 4 chi + 1 pair.
+      -- 1-2-3 / 4-5-6 / 7-8-9 / 2-3-4 / 5-5 — all bing. Pure suit is 7 fan
+      -- (well above the 3-fan minimum). Drawn tile is the second 5b.
+      local hand = parse("123b 456b 789b 234b 5b 5b")
+      local drawn_id = hand[#hand].tile_id
+      local deal = make_deal(hand, {}, {{},{},{}})
+      deal.phase = "awaiting_action" as DealPhase
+      deal.last_drawn_tile_id = drawn_id
+      deal.has_last_drawn = true
+      deal.active_boons[#deal.active_boons + 1] = context.new_active("hu_seer", "starter" as AcquisitionPoint)
+
+      local tr = engine.apply_action(deal, engine.declare_hu(1, "" as TileId, true))
+      assert.is_true(tr.ok, tr.error)
+      assert.are.equal(1, hus_seen)
+      assert.is_true(last_fan >= 3)
    end)
 end)

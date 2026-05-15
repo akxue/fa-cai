@@ -783,6 +783,7 @@ local function apply_peng(d: DealState, winner_index: integer): DealTransition
          event_name    = "on_peng",
          tile_set      = peng_set,
          source_player = discarder,
+         kong_kind     = "",
       }
       emit_event(d, ev_peng as EventData)
    else
@@ -833,6 +834,7 @@ local function apply_open_kong(d: DealState, winner_index: integer): DealTransit
          event_name    = "on_kong",
          tile_set      = kong_set,
          source_player = discarder,
+         kong_kind     = "open",
       }
       emit_event(d2, ev_kong as EventData)
    else
@@ -880,6 +882,7 @@ local function apply_chi(d: DealState, claim: PendingClaim): DealTransition
          event_name    = "on_chi",
          tile_set      = chi_set,
          source_player = discarder,
+         kong_kind     = "",
       }
       emit_event(d, ev_chi as EventData)
    else
@@ -951,6 +954,7 @@ local function apply_all_pass(d: DealState): DealTransition
             event_name    = "on_kong",
             tile_set      = kong_set,
             source_player = -1,
+            kong_kind     = "added",
          }
          emit_event(d2, ev_kong as EventData)
       else
@@ -1286,6 +1290,7 @@ local function handle_concealed_kong(deal: DealState, action: DeclareConcealedKo
          event_name    = "on_ankan",
          tile_set      = ankan_set,
          source_player = -1,
+         kong_kind     = "",
       }
       emit_event(d2, ev_ankan as EventData)
    else
