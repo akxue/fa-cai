@@ -102,13 +102,24 @@ describe("boon_offer.eligible_at", function()
       assert.are.same({"hidden_path", "honors_gift", "pure_path"}, ids)
    end)
 
-   it("returns all set_1-eligible boons (honor + suit + concealed)", function()
+   it("returns every set_1-eligible boon from the catalog", function()
+      -- Build the expected list from the catalog rather than hard-coding
+      -- ids — keeps this test stable as S04 adds more set_1-eligible boons.
+      local expected: {string} = {}
+      for _, b in ipairs(registry.all()) do
+         for _, m in ipairs(b.eligible_milestones) do
+            if (m as string) == "set_1" then
+               expected[#expected + 1] = b.id; break
+            end
+         end
+      end
+      table.sort(expected)
+
       local pool = offer.eligible_at("set_1" as MilestoneId, {})
       local ids: {string} = {}
       for _, b in ipairs(pool) do ids[#ids + 1] = b.id end
       table.sort(ids)
-      -- honor_sense is flex (set_1+set_2) so appears in the set_1 pool.
-      assert.are.same({"cleanse", "honor_sense", "honors_eye", "silent_march"}, ids)
+      assert.are.same(expected, ids)
    end)
 
    it("includes flex-eligible boons at multiple milestones", function()

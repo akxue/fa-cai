@@ -29,8 +29,12 @@ end
 -- against ids already in the list. Used by peek-style boons (Honor's Eye,
 -- Honor Sense, etc.) so repeated emissions against the same wall front
 -- don't pile duplicates into the Known Wall UI strip.
-local function mark_wall_known(ctx: BoonContext, peeked: {Tile})
-   local player = ctx.deal.players[ctx.player_index]
+--
+-- Takes a PlayerState directly rather than a BoonContext so the helper is
+-- usable from non-boon paths (debug tools, future M3+ opponent peeks)
+-- without an artificial context. Boon effects pass
+-- `ctx.deal.players[ctx.player_index]`.
+local function mark_wall_known(player: PlayerState, peeked: {Tile})
    for _, t in ipairs(peeked) do
       local already_known = false
       for _, id in ipairs(player.known_wall_tile_ids) do
@@ -54,20 +58,19 @@ local function effect_honor_sense(ctx: BoonContext, _ev: EventData)
    local count = ctx:get_counter("opp_honor_discards") + 1
    ctx:set_counter("opp_honor_discards", count)
    if count % 3 == 0 then
-      mark_wall_known(ctx, ctx:peek_wall(2))
+      mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(2))
    end
 end
 
 -- Dragon Pulse (set_2, honor): every dragon set you form (peng / open
 -- kong / concealed kong), gain 1 mulligan + 1 peek token. The boon
 -- listens on the call events and inspects the tile_set kind to detect
--- dragons; no separate on_dragon_set_formed event needed.
+-- dragons; no separate on_dragon_set_formed event needed. Chi is
+-- naturally filtered by DRAGON_KINDS (dragons can't form chi in HK).
 local function effect_dragon_pulse(ctx: BoonContext, ev: EventData)
    local call_ev = ev as CallEvent
    if #call_ev.tile_set.tiles == 0 then return end
    if not DRAGON_KINDS[call_ev.tile_set.tiles[1].kind_id as string] then return end
-   -- chi is suited-only, so on_chi can't reach here in practice; defense.
-   if call_ev.tile_set.kind == "chi" then return end
    ctx:grant_token("mulligan", 1)
    ctx:grant_token("peek", 1)
 end
