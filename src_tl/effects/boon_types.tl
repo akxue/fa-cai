@@ -10,8 +10,11 @@ require("game.deal_types")
 global type Cluster          = string   -- "honor" | "suit" | "concealed"
 global type MilestoneId      = string   -- "starter" | "set_1" | "set_2" | "set_3" | "ting"
 global type BoonEffectKind   = string   -- "peek" | "mulligan" | "swap" | "extra_draw" | "info" | "token"
-global type AcquisitionPoint = string   -- MilestoneId values plus "carried"
 global type EventName        = string   -- see fixed vocabulary in MILESTONE-2-PLAN.md §148
+
+-- AcquisitionPoint and ActiveBoon are declared in game/deal_types.tl
+-- (alongside ActiveEffectState) because they are domain state stored on
+-- DealState/RunState. This module references them through that declaration.
 
 -- Function-type aliases used in BoonContext / live_counter signatures.
 -- Aliased to dodge Teal's tuple-return parsing of bare `function(X): bool, Y`.
@@ -107,16 +110,6 @@ global record Boon
    listens:              {EventName}
    condition:            function(BoonContext, EventData): boolean
    effect:               function(BoonContext, EventData)
-end
-
--- ── ActiveBoon (instance state held on Run / Deal state) ──────────────────
-
-global record ActiveBoon
-   boon_id:       string
-   acquired_at:   AcquisitionPoint
-   counters:      {string: integer}    -- numeric per-boon state (counters, accumulators)
-   flags:         {string: boolean}    -- boolean per-boon state (used_this_deal, etc.)
-   tokens:        {string: integer}    -- token pools keyed by token_kind
 end
 
 -- ── BoonContext (API surface visible to condition/effect functions) ───────

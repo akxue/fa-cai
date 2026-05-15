@@ -73,6 +73,7 @@ local function make_deal(p1_concealed: {Tile}, sets: {TileSet}): DealState
       last_drawn_tile_id       = "" as TileId,
       has_last_drawn           = false,
       effect_states            = {},
+      active_boons             = {},
    }
 end
 

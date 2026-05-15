@@ -85,6 +85,7 @@ local function make_deal(
       last_drawn_tile_id       = last_drawn_tile_id,
       has_last_drawn           = has_last_drawn,
       effect_states            = {},
+      active_boons             = {},
    }
 end
 

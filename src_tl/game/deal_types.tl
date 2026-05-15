@@ -87,7 +87,8 @@ global record DealState
    last_draw_was_supplement: boolean
    last_drawn_tile_id:   TileId         -- tile drawn on the most recent draw (for zi mo)
    has_last_drawn:       boolean
-   effect_states:        {string: ActiveEffectState}  -- keyed by active_effect_id
+   effect_states:        {string: ActiveEffectState}  -- M1 effects keyed by active_effect_id
+   active_boons:         {ActiveBoon}                 -- M2 boons active for this deal
 end
 
 -- An active effect instance owned by a player (or the deal). Counters live here
@@ -101,6 +102,24 @@ global record ActiveEffectState
    has_owner:           boolean
    counters:            {string: integer}
    used_this_deal:      boolean
+end
+
+-- ── M2 boon instance state (D012) ─────────────────────────────────────────
+--
+-- ActiveBoon and AcquisitionPoint live here (alongside ActiveEffectState)
+-- because they are domain state stored on DealState/RunState. The M2 boon
+-- system (effects.boon_types) extends behavior on top of these records but
+-- the records themselves are part of the game domain.
+
+global type AcquisitionPoint = string
+-- "starter" | "set_1" | "set_2" | "set_3" | "ting" | "carried"
+
+global record ActiveBoon
+   boon_id:       string
+   acquired_at:   AcquisitionPoint
+   counters:      {string: integer}    -- numeric per-boon state
+   flags:         {string: boolean}    -- boolean per-boon state
+   tokens:        {string: integer}    -- token pools keyed by token_kind
 end
 
 -- ── Win shapes ────────────────────────────────────────────────────────────
