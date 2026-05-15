@@ -46,10 +46,12 @@ describe("ui.boon_card.cluster_color", function()
 
    it("returns a fallback tint for unknown clusters", function()
       local r, g, b = card.cluster_color("future_cluster" as Cluster)
-      -- Fallback is grey-ish; values should all be in [0, 1].
-      assert.is_true(r >= 0 and r <= 1)
-      assert.is_true(g >= 0 and g <= 1)
-      assert.is_true(b >= 0 and b <= 1)
+      -- Fallback should be a neutral grey: all three channels equal.
+      -- (Asserting equality across channels catches a typo'd FALLBACK_TINT
+      -- that the [0,1] range check alone would miss.)
+      assert.are.equal(r, g)
+      assert.are.equal(g, b)
+      assert.is_true(r > 0 and r < 1, "fallback grey must be neither pure black nor pure white")
    end)
 end)
 

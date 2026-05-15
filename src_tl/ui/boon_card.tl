@@ -65,16 +65,19 @@ end
 
 -- ── Drawing (LÖVE) ────────────────────────────────────────────────────────
 --
--- Card anatomy (top to bottom):
---   • cluster header strip (8 px tall, full width) — tinted band
---   • cluster label + hotkey on the same row, padding 12 px
---   • boon name, ~18 px below
---   • description, ~28 px below name, wrapped to card width minus padding
+-- Card anatomy (top to bottom, all offsets measured from y + HEADER_H):
+--   • cluster header strip — HEADER_H px tall, full width, tinted band
+--   • cluster label + hotkey row at LABEL_Y_OFF
+--   • boon name at NAME_Y_OFF
+--   • description at DESC_Y_OFF, wrapped to card interior width
 --
 -- Selected cards get a brighter border + slightly lighter background.
 
-local PAD <const> = 14
-local HEADER_H <const> = 8
+local PAD <const>          = 14
+local HEADER_H <const>     = 8
+local LABEL_Y_OFF <const>  = 8
+local NAME_Y_OFF <const>   = 30
+local DESC_Y_OFF <const>   = 56
 
 function M.draw(view: BoonCardView)
    local cr, cg, cb = M.cluster_color(view.boon.cluster)
@@ -101,12 +104,12 @@ function M.draw(view: BoonCardView)
 
    -- Cluster label.
    love.graphics.setColor(cr, cg, cb, 1.0)
-   love.graphics.print(cluster_label(view.boon.cluster):upper(), view.x + PAD, view.y + HEADER_H + 8)
+   love.graphics.print(cluster_label(view.boon.cluster):upper(), view.x + PAD, view.y + HEADER_H + LABEL_Y_OFF)
 
    -- Hotkey on the right.
    if view.hotkey ~= "" then
       love.graphics.setColor(0.65, 0.65, 0.70, 1.0)
-      love.graphics.printf("[" .. view.hotkey .. "]", view.x, view.y + HEADER_H + 8, view.w - PAD, "right")
+      love.graphics.printf("[" .. view.hotkey .. "]", view.x, view.y + HEADER_H + LABEL_Y_OFF, view.w - PAD, "right")
    end
 
    -- Boon name.
@@ -115,14 +118,14 @@ function M.draw(view: BoonCardView)
    else
       love.graphics.setColor(0.92, 0.92, 0.95, 1.0)
    end
-   love.graphics.print(view.boon.name, view.x + PAD, view.y + HEADER_H + 30)
+   love.graphics.print(view.boon.name, view.x + PAD, view.y + HEADER_H + NAME_Y_OFF)
 
    -- Description, wrapped to card interior width.
    love.graphics.setColor(0.75, 0.75, 0.80, 1.0)
    love.graphics.printf(
       view.boon.description,
       view.x + PAD,
-      view.y + HEADER_H + 56,
+      view.y + HEADER_H + DESC_Y_OFF,
       view.w - PAD * 2,
       "left"
    )
