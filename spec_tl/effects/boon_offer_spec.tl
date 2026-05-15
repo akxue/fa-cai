@@ -69,11 +69,11 @@ describe("m2_boons catalog", function()
       m2_boons.register_all()
    end)
 
-   it("registers the current catalog of 8 M2 boons", function()
-      -- S02 baseline: 6 (1 starter + 1 set_1 per cluster). S04 incremental
-      -- additions: honor_sense (set_1+set_2 flex), dragon_pulse (set_2).
+   it("registers the current catalog of 10 M2 boons", function()
+      -- S02 baseline: 6 (1 starter + 1 set_1 per cluster). S04 additions:
+      -- honor_sense, dragon_pulse, silent_stand, concealed_insight.
       local all = registry.all()
-      assert.are.equal(8, #all)
+      assert.are.equal(10, #all)
    end)
 
    it("find returns the boon for a known id", function()

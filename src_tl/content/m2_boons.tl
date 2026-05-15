@@ -98,6 +98,88 @@ local function effect_dragon_pulse(ctx: BoonContext, ev: EventData)
    ctx:grant_token("peek", 1)
 end
 
+-- Helper: is this event a player call (chi/peng/kong/ankan)?
+local function is_player_call_event(event_name: string): boolean
+   return event_name == "on_chi"
+      or event_name == "on_peng"
+      or event_name == "on_kong"
+      or event_name == "on_ankan"
+end
+
+-- Silent March (set_1 / set_2 flex, concealed): every 3 consecutive
+-- no-call turns, gain 1 peek token. Per plan §488, "consecutive" means
+-- the counter resets on any of the player's calls but the boon stays
+-- alive (later quiet streaks still earn tokens). Tracks per-turn call
+-- state via a transient flag that the next discard clears.
+--
+-- TODO(S07): the `called_this_turn` transient flag persists on the
+-- ActiveBoon record. For a deal-scoped boon this is fine — flags reset
+-- via boon_context.new_active at deal start. For run-scoped (carried)
+-- boons, the run→deal copy in deal_engine.new_deal_with_run carries
+-- residual flags forward; a stale called_this_turn=true would cause
+-- the next deal's first discard to spuriously reset the streak. Same
+-- caveat applies to silent_stand below. Resolve at carry-forward time.
+local function effect_silent_march(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if is_player_call_event(name) then
+      ctx:set_flag("called_this_turn", true)
+   elseif name == "on_player_discard" then
+      if ctx:get_flag("called_this_turn") then
+         ctx:set_flag("called_this_turn", false)
+         ctx:set_counter("consecutive_no_call", 0)
+      else
+         local n = ctx:get_counter("consecutive_no_call") + 1
+         ctx:set_counter("consecutive_no_call", n)
+         if n % 3 == 0 then
+            ctx:grant_token("peek", 1)
+         end
+      end
+   end
+end
+
+-- Silent Stand (set_3, concealed): same pattern as Silent March but
+-- every 5 consecutive no-call turns grants 1 mulligan token.
+local function effect_silent_stand(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if is_player_call_event(name) then
+      ctx:set_flag("called_this_turn", true)
+   elseif name == "on_player_discard" then
+      if ctx:get_flag("called_this_turn") then
+         ctx:set_flag("called_this_turn", false)
+         ctx:set_counter("consecutive_no_call", 0)
+      else
+         local n = ctx:get_counter("consecutive_no_call") + 1
+         ctx:set_counter("consecutive_no_call", n)
+         if n > 0 and n % 5 == 0 then
+            ctx:grant_token("mulligan", 1)
+         end
+      end
+   end
+end
+
+-- Concealed Insight (set_1 / set_2 flex, concealed): every 4 of your
+-- discards while you have made no calls, peek 1 wall tile. Per plan
+-- §489, "while no calls" means the boon permanently disqualifies on
+-- the first player call — unlike Silent March's reset-on-call pattern.
+local function effect_concealed_insight(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if is_player_call_event(name) then
+      ctx:set_flag("disqualified", true)
+      -- Clear the in-flight counter so a debug-UI surfacing tokens/
+      -- counters doesn't show "3/4 toward peek" on a permanently dead
+      -- boon. Harmless either way — the early-return on the discard
+      -- path makes the counter inert from here on.
+      ctx:set_counter("no_call_discards", 0)
+   elseif name == "on_player_discard" then
+      if ctx:get_flag("disqualified") then return end
+      local n = ctx:get_counter("no_call_discards") + 1
+      ctx:set_counter("no_call_discards", n)
+      if n % 4 == 0 then
+         mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(1))
+      end
+   end
+end
+
 -- ── Catalog ──────────────────────────────────────────────────────────────
 -- 6 S02 plumbing-validation boons + S04 additions as effect logic lands.
 
@@ -199,9 +281,33 @@ local BOONS: {Boon} = {
       eligible_milestones = {"set_1", "set_2"},
       effect_kind         = "token",
       weight              = 1.0,
-      listens             = {"on_turn_end"},
+      listens             = {"on_player_discard", "on_chi", "on_peng", "on_kong", "on_ankan"},
       condition           = always_true,
-      effect              = noop_effect,
+      effect              = effect_silent_march,
+   },
+   {
+      id                  = "silent_stand",
+      cluster             = "concealed",
+      name                = "Silent Stand",
+      description         = "Every 5 consecutive no-call turns, gain 1 mulligan token.",
+      eligible_milestones = {"set_3"},
+      effect_kind         = "token",
+      weight              = 1.0,
+      listens             = {"on_player_discard", "on_chi", "on_peng", "on_kong", "on_ankan"},
+      condition           = always_true,
+      effect              = effect_silent_stand,
+   },
+   {
+      id                  = "concealed_insight",
+      cluster             = "concealed",
+      name                = "Concealed Insight",
+      description         = "Every 4 of your discards while you have made no calls, peek 1 wall tile.",
+      eligible_milestones = {"set_1", "set_2"},
+      effect_kind         = "peek",
+      weight              = 1.0,
+      listens             = {"on_player_discard", "on_chi", "on_peng", "on_kong", "on_ankan"},
+      condition           = always_true,
+      effect              = effect_concealed_insight,
    },
 }
 
