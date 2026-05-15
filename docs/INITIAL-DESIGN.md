@@ -2,6 +2,27 @@
 
 > Last updated: May 2026. Share-ready pass. This document describes the intended game, the broader Phase 0 prototype target, and the current design assumptions. Milestone-specific build scope lives in separate milestone plans.
 
+> **Boon system status (May 2026)**: The boon system has been substantially redesigned during the M2 planning audit. The sections marked **[Superseded by M2]** in this document — *The Boon System*, *Phase 0 Boon Pool*, and *Boon Catalog* — describe the original v4.1 design and are retained for historical context. **For canonical boon design, see `docs/MILESTONE-2-PLAN.md`** (cluster system, 16 grounding principles, 24-boon library, event-listener architecture, milestone forks, carry-forward via fan). The broader game vision in this document — tournament structure, scoring system, hand patterns, opponent packages, Phase 0 scope — remains canonical. See the *Design Evolution* note below for a summary of what changed and why.
+
+---
+
+## Design Evolution
+
+This section tracks substantive design pivots after v4.1's initial publication. Each entry preserves the *why* so future iterations have decision context, not just outcomes.
+
+### May 2026 — Boon system redesign (M2 audit)
+
+**What changed.** The original v4.1 boon system was 12 archetype-organized boons (Sculptor / Hunter / Caller / Reader / Gambler / Grinder), each firing on one of 8 trigger moments and primarily modifying fan at Hu. The M2 audit replaced this with a **3-cluster system** (Honor / Suit / Concealed), a **24-boon library**, **in-deal milestone forks** (set 1 / 2 / 3 / ting reached) on top of the existing pre-round pick, an **event-listener architecture** with 7 engine primitives, and a **carry-forward mechanism** that converts native HK fan into roguelike progression instead of letting boons add fan directly.
+
+**Why it changed.**
+
+- *Fan-modifying boons hollow out HK's scoring economy*: the original design's heavy reliance on "+X fan if Y" boons (Current, Dragon's Weight, Still Water, etc.) effectively duplicated HK's pattern-reward structure and tempted chicken-hand wins by stacking small fan accumulators. The replacement principle — "boons enable play; fan rewards play" — separates the two layers cleanly.
+- *The bookend problem*: many original boons fired only at opening or only at Hu, leaving the ~50-turn middle of a deal without roguelike presence. Milestone forks at set 1/2/3/ting put 4 additional pick moments inside each deal, so the roguelike layer touches mid-match decisions.
+- *Cluster commitment provides build identity without forcing it*: archetypes were a design tool the player never saw; clusters are visible to the player and shape their strategic decisions on which boons to accept or decline.
+- *Event-listener replaces query/command*: M1's D005 architecture (query hooks plus typed commands) scaled for 7 boons but accumulated friction for a growing library. The new model is a pure data registry with a fixed primitive vocabulary; adding boons no longer requires engine changes.
+
+**Where to read more.** `docs/MILESTONE-2-PLAN.md` has the full design (architecture, principles, library, slice plan). `docs/DECISIONS.md` D012 captures the architectural decision and supersedes D005.
+
 ---
 
 ## Short Pitch
@@ -178,6 +199,8 @@ Ratings are aspirational in Phase 0. They do not improve boon rarity or reward q
 
 ## The Boon System
 
+> **[Superseded by M2]** — This section describes the original v4.1 boon system (core principles, 8 trigger moments, memory types). The canonical boon system as of M2 is the event-listener architecture with 16 grounding principles, 7 engine primitives, and cluster-based design. See `docs/MILESTONE-2-PLAN.md`. The original section is retained below for design history.
+
 ### Core Principles
 
 - You start each run with 1 starter boon chosen before Round 1
@@ -211,6 +234,8 @@ Every boon fires on one of these moments inside a single hand:
 ---
 
 ## Phase 0 Boon Pool
+
+> **[Superseded by M2]** — The 12-boon Phase 0 pool described below has been replaced by M2's 24-boon library across 3 clusters (Honor, Suit, Concealed). See `docs/MILESTONE-2-PLAN.md` for the canonical library. The original pool is retained for historical context.
 
 Phase 0 starts with 12 player boons. This is intentionally small enough to test the core loop and build identity without overwhelming newcomers.
 
@@ -283,6 +308,8 @@ Opponent packages should be displayed before the hand starts and remain inspecta
 ---
 
 ## Boon Catalog
+
+> **[Superseded by M2]** — The archetype catalog below (Sculptor, Hunter, Caller, Reader, Gambler, Grinder) was superseded by the 3-cluster system (Honor, Suit, Concealed) during the M2 audit. The archetype framing is preserved as a future design reference — individual archetype boons may be revisited and migrated into the cluster system in M3+. See `docs/MILESTONE-2-PLAN.md` for the canonical library.
 
 Boons are organized by archetype (design reference only) and tier. Tier 1 boons fire on guaranteed triggers, low ceiling, always useful. Tier 2 fire on conditional triggers, higher ceiling. Tier 3 are build-warping, can be weak alone, devastating in combination.
 
@@ -403,6 +430,8 @@ Active. Once per hand, retrieve any tile from the discard pile -- yours or an op
 ---
 
 ## Boon Interaction Highlights
+
+> **[Superseded by M2]** — The interaction highlights below reference original v4.1 boons (Discipline, Still Water, Dragon's Weight, etc.) that no longer exist in the M2 library. See `docs/MILESTONE-2-PLAN.md` for the canonical cluster-synergy descriptions in the *Cluster Commitment Summary* table.
 
 The combinations worth knowing before playtesting:
 

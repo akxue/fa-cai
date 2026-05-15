@@ -5,7 +5,8 @@ This file is the shared project brief for AI coding agents working on facai. Kee
 Read this file first, then read:
 
 - `docs/INITIAL-DESIGN.md` for the game vision and broader Phase 0 target.
-- `docs/MILESTONE-1-PLAN.md` for the current build scope and architecture decisions.
+- `docs/MILESTONE-2-PLAN.md` for the **current** build scope, architecture, and slice breakdown.
+- `docs/MILESTONE-1-PLAN.md` for the prior milestone (shipped; reference for hand notation and inherited foundations).
 - `docs/DECISIONS.md` for durable architecture, rules, and workflow decisions.
 - `docs/AGENT-ROLES.md` when splitting work across specialized agents.
 - `docs/DEVELOPMENT-WORKFLOW.md` for branch, PR, review, and CI expectations.
@@ -30,18 +31,15 @@ The term for a hand one tile from a valid Hu is **ting** (聽牌). Do not use "t
 
 facai is a solo roguelike mahjong game built with LÖVE + Teal. The player races three AI opponents to a valid Hong Kong mahjong Hu, using boons to bend scoring, information, and timing.
 
-Milestone 1 is a one-round vertical slice, not the full five-round tournament:
+Milestone 1 (shipped) was a one-round vertical slice: 1 starter boon from 3 offers, one deal against 3 vanilla opponents, win → reward screen, lose → retry Round 1.
 
-- Choose 1 starter boon from 3 curated offers.
-- Play Round 1 against 3 vanilla AI opponents.
-- Win the deal to see a reward screen.
-- Lose a deal to lose 1 life and retry Round 1.
-- Stop at a readable dev/playtestable slice before Round 2+ and full opponent packages.
+Milestone 2 (active) replaces M1's effect system with an event-listener boon architecture, introduces in-deal milestone forks, a 24-boon library across 3 clusters (Honor / Suit / Concealed), the full 5-round tournament loop, opponent escalation, and a carry-forward mechanism between deals. See `docs/MILESTONE-2-PLAN.md`.
 
 ## Source Of Truth
 
 - Product/game design: `docs/INITIAL-DESIGN.md`
-- Milestone 1 engineering plan: `docs/MILESTONE-1-PLAN.md`
+- Active milestone engineering plan: `docs/MILESTONE-2-PLAN.md`
+- Prior milestone (shipped): `docs/MILESTONE-1-PLAN.md`
 - Durable decisions: `docs/DECISIONS.md`
 - Agent responsibility model: `docs/AGENT-ROLES.md`
 - Development workflow: `docs/DEVELOPMENT-WORKFLOW.md`
@@ -73,7 +71,7 @@ Until those commands exist, do not invent successful verification. Say what coul
 
 Do not begin implementation from a broad request. Before code changes, identify:
 
-- the Milestone 1 slice and task from `docs/MILESTONE-1-PLAN.md`
+- the slice and task from the active milestone plan (currently `docs/MILESTONE-2-PLAN.md`)
 - the acceptance criteria
 - likely owned files/modules
 - verification commands
@@ -160,8 +158,8 @@ Forbidden dependency directions:
 
 ## Game Architecture Rules
 
-- Core rules come first; effects extend through typed query/command points.
-- Effects must not bypass Hu shape validation or the 3 fan minimum in Milestone 1.
+- Core rules come first. In M1, effects extended through typed query/command points (D005). In M2 (D012, supersedes D005), boons extend through an event-listener architecture and a fixed set of engine primitives — see `docs/MILESTONE-2-PLAN.md`.
+- Boons must not bypass Hu shape validation or the 3 fan minimum; fan is computed only by the scorer.
 - Boon behavior should produce structured scoring reasons or events, not hidden side effects.
 - AI must use the same `DealAction` path and validator/scorer as the player.
 - Debug UI should expose enough state to diagnose rules bugs: seeds, wall count, pending reactions, score candidates, AI reasoning, and tile conservation.
@@ -211,7 +209,7 @@ Before finishing:
 - Keep `README.md` human-facing and concise.
 - Keep `AGENTS.md` agent-facing and concise.
 - Put broad game design in `docs/INITIAL-DESIGN.md`.
-- Put current build scope and architecture decisions in `docs/MILESTONE-1-PLAN.md`.
+- Put current build scope and architecture decisions in the active milestone plan (`docs/MILESTONE-2-PLAN.md`).
 - Do not duplicate rule decisions across docs unless the second location clearly points to the canonical source.
 
 ## Change Discipline
