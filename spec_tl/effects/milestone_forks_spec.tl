@@ -87,6 +87,7 @@ local function make_deal_for_p1(
       active_boons             = {},
       set_count_high_water     = 0,
       reached_ting             = false,
+      declined_boons_this_deal = {},
    }
 end
 
