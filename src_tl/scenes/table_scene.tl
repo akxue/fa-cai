@@ -734,7 +734,11 @@ local function milestone_label(m: MilestoneId): string
    elseif s == "set_3" then return "Set 3 reached"
    elseif s == "ting"  then return "Ting reached"
    end
-   return s
+   -- Only set_1/2/3/ting reach the modal — evaluate_milestones never
+   -- queues "starter" or "carried" into pending_forks. Hitting this
+   -- branch indicates a programmer error upstream, not a recoverable
+   -- runtime condition.
+   error("milestone_label: unexpected milestone id: " .. s)
 end
 
 local function draw_fork_modal()
@@ -795,6 +799,11 @@ local function on_mousepressed(x: number, y: number, mouse_button: integer)
    if fork_modal_active() then
       -- Only the fork cards are clickable. Misses inside the modal area
       -- do nothing (modal is mandatory — no dismiss-by-misclick).
+      -- fork_clickables is refreshed inside draw_fork_modal each frame.
+      -- If a click arrives before the first draw after a state change
+      -- (theoretical frame-ordering quirk), the rects could be stale —
+      -- engine.apply_action(pick_boon_offer) then rejects the unknown
+      -- boon_id with a logged error, so the worst case is no-op + log.
       local hit = clickable_mod.find(fork_clickables, x, y)
       if hit ~= nil then hit.callback() end
       return
