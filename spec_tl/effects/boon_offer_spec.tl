@@ -364,4 +364,22 @@ describe("M2-S03 acceptance — starter does not bias future offers", function()
       -- And the pool contains all 3 set_1-eligible M2 boons.
       assert.are.equal(3, #seen_pools[1])
    end)
+
+   it("compose_offer with a fixed seed yields the same offer regardless of starter pick", function()
+      -- Stronger Model B verification: actually run compose_offer with the
+      -- same RNG seed under each of 3 different starter picks. Since none
+      -- of the starter boons are also set_1-eligible, the set_1 offer
+      -- must be byte-identical across the 3 runs.
+      local context_mod = require("effects.boon_context")
+      local STARTERS: {string} = {"honors_gift", "pure_path", "hidden_path"}
+      local offer_ids_by_starter: {{string}} = {}
+      for _, starter_id in ipairs(STARTERS) do
+         local d = empty_deal()
+         d.active_boons[#d.active_boons + 1] = context_mod.new_active(starter_id, "starter" as AcquisitionPoint)
+         local out, _ = offer.compose_offer(rng_mod.from_seed(424242), "set_1" as MilestoneId, d, 3)
+         offer_ids_by_starter[#offer_ids_by_starter + 1] = offer.offer_ids(out)
+      end
+      assert.are.same(offer_ids_by_starter[1], offer_ids_by_starter[2])
+      assert.are.same(offer_ids_by_starter[2], offer_ids_by_starter[3])
+   end)
 end)

@@ -28,6 +28,7 @@ local record M2BoonSelectState
    offers:     {Boon}
    clickables: {Clickable}
    seed:       integer
+   run_rng:    RngState   -- RNG state AFTER offer composition; threaded into RunState on pick
 end
 
 local state: M2BoonSelectState = nil
@@ -42,17 +43,27 @@ local function on_load()
    m2_boons.reset()
    m2_boons.register_all()
 
+   -- TODO(S07): replace os.time() seeding with a save-game seed register
+   -- so carry-forward replay can reconstruct the run deterministically.
    local seed = os.time() as integer
-   local offer, _ = boon_offer.compose_starter_offer(rng_mod.from_seed(seed))
-   state = { selected = 1, offers = offer, clickables = {}, seed = seed }
+   local offer, run_rng = boon_offer.compose_starter_offer(rng_mod.from_seed(seed))
+   state = {
+      selected   = 1,
+      offers     = offer,
+      clickables = {},
+      seed       = seed,
+      run_rng    = run_rng,
+   }
 end
 
 local function on_update(_dt: number)
 end
 
 local function start_run_with(boon_id: string)
-   local rng = rng_mod.from_seed(state.seed)
-   local rs = run_state.new_run(rng)
+   -- Use the RNG advanced by compose_starter_offer (rather than re-seeding)
+   -- so future random work in the run is independent of the offer-shuffle
+   -- state. Same seed for save/log purposes via table_scene.start_run.
+   local rs = run_state.new_run(state.run_rng)
    rs.active_boons[#rs.active_boons + 1] =
       boon_context.new_active(boon_id, "starter" as AcquisitionPoint)
    table_scene.start_run(rs, state.seed)
