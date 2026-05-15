@@ -111,6 +111,14 @@ end
 -- the counter resets on any of the player's calls but the boon stays
 -- alive (later quiet streaks still earn tokens). Tracks per-turn call
 -- state via a transient flag that the next discard clears.
+--
+-- TODO(S07): the `called_this_turn` transient flag persists on the
+-- ActiveBoon record. For a deal-scoped boon this is fine — flags reset
+-- via boon_context.new_active at deal start. For run-scoped (carried)
+-- boons, the run→deal copy in deal_engine.new_deal_with_run carries
+-- residual flags forward; a stale called_this_turn=true would cause
+-- the next deal's first discard to spuriously reset the streak. Same
+-- caveat applies to silent_stand below. Resolve at carry-forward time.
 local function effect_silent_march(ctx: BoonContext, ev: EventData)
    local name = ev.event_name as string
    if is_player_call_event(name) then
@@ -122,7 +130,7 @@ local function effect_silent_march(ctx: BoonContext, ev: EventData)
       else
          local n = ctx:get_counter("consecutive_no_call") + 1
          ctx:set_counter("consecutive_no_call", n)
-         if n > 0 and n % 3 == 0 then
+         if n % 3 == 0 then
             ctx:grant_token("peek", 1)
          end
       end
@@ -157,11 +165,16 @@ local function effect_concealed_insight(ctx: BoonContext, ev: EventData)
    local name = ev.event_name as string
    if is_player_call_event(name) then
       ctx:set_flag("disqualified", true)
+      -- Clear the in-flight counter so a debug-UI surfacing tokens/
+      -- counters doesn't show "3/4 toward peek" on a permanently dead
+      -- boon. Harmless either way — the early-return on the discard
+      -- path makes the counter inert from here on.
+      ctx:set_counter("no_call_discards", 0)
    elseif name == "on_player_discard" then
       if ctx:get_flag("disqualified") then return end
       local n = ctx:get_counter("no_call_discards") + 1
       ctx:set_counter("no_call_discards", n)
-      if n > 0 and n % 4 == 0 then
+      if n % 4 == 0 then
          mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(1))
       end
    end

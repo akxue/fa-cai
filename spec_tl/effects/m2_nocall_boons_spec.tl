@@ -188,6 +188,22 @@ describe("M2 boon: silent_stand", function()
       for _ = 1, 10 do fire_player_discard(deal, deal.active_boons) end
       assert.are.equal(2, active.tokens["mulligan"])
    end)
+
+   it("resets the consecutive counter when the player calls", function()
+      -- Mirror of the silent_march reset test against the 5-streak boon
+      -- so the shared pattern's reset semantics are proven for both.
+      local deal = make_deal({})
+      local active = context.new_active("silent_stand", "set_3" as AcquisitionPoint)
+      deal.active_boons[#deal.active_boons + 1] = active
+
+      for _ = 1, 4 do fire_player_discard(deal, deal.active_boons) end
+      assert.are.equal(4, active.counters["consecutive_no_call"])
+
+      fire_player_peng(deal, deal.active_boons)
+      fire_player_discard(deal, deal.active_boons)
+      assert.are.equal(0, active.counters["consecutive_no_call"])
+      assert.are.equal(0, active.tokens["mulligan"] or 0)
+   end)
 end)
 
 -- ── concealed_insight ────────────────────────────────────────────────────
@@ -225,8 +241,8 @@ describe("M2 boon: concealed_insight", function()
       -- 10 more discards should not advance the counter or peek.
       for _ = 1, 10 do fire_player_discard(deal, deal.active_boons) end
       assert.are.equal(0, #deal.players[1].known_wall_tile_ids)
-      -- Counter is left frozen at its pre-call value (3). The boon's
-      -- effect early-returns on the disqualified path.
-      assert.are.equal(3, active.counters["no_call_discards"])
+      -- Counter is cleared to 0 alongside the disqualify flag (cleaner
+      -- debug surface than leaving it frozen at the pre-call value).
+      assert.are.equal(0, active.counters["no_call_discards"])
    end)
 end)
