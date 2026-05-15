@@ -19,3 +19,6 @@ lua_modules/
 # Local-only agent notes
 CLAUDE.local.md
 AGENTS.override.md
+
+# Symbol art staging zone (experiments, contact sheets, candidate renders)
+assets/symbols/_review/

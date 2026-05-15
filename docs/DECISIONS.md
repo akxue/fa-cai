@@ -104,7 +104,7 @@ Implications:
 
 ## D005: Effects Produce Commands; The Engine Applies; The Runner Is The Only Score Modifier Hook
 
-Status: accepted
+Status: superseded by D012 (M2 replaces this with the event-listener boon architecture)
 
 Context:
 - Boons (and later relics, classes, opponent packages, boss auras, challenge modifiers) need to extend rules without forking core engine code.
@@ -281,3 +281,38 @@ Implications:
 - Adding a new tile kind = drop the 128×128 stamp into the right subfolder and add the kind→path mapping in `assets.tl`.
 - Rendering features (hover glow, ting indicator, danger ring, ghost tile for legality preview) are tile_render opts, not new assets.
 - The fallback path in `tile_render.draw_tile` paints a centered text label when `tile_symbol(kind_id)` returns nil, so the table renders sensibly even if an asset is missing for a given kind.
+
+
+## D012: Event-Listener Boon Architecture Replaces Query/Command Effect System
+
+Status: accepted (supersedes D005)
+
+Context:
+- D005 specified the M1 effect system: query hooks (`collect_score_modifiers`, `collect_opening_modifiers`, `collect_available_actions`) plus typed `EffectCommand` records (`IncrementCounterCommand`, `RevealWallFrontCommand`, `ReplaceConcealedTilesCommand`, etc.). That model was scoped for M1's 7 starter boons across a single deal.
+- M2 expands to a 24-boon library across 3 thematic clusters, with in-deal milestone forks (set 1 / 2 / 3 / ting), accumulating-trigger boons (every N events fires an effect), drastic mechanics (Salvage Hand reclaims older discards), and a carry-forward mechanism that uses native HK fan to scale roguelike progression. See `docs/MILESTONE-2-PLAN.md`.
+- The query/command shape from D005 doesn't fit M2's needs: many small additive listeners on the same engine events, composable effects via shared engine state, primitive-based reuse, and a pure data registry that supports fast iteration without engine changes per boon.
+- A long design audit (16 grounding principles, full cluster reworks for Honor / Suit / Concealed) produced the principles section in `MILESTONE-2-PLAN.md`. Two principles drive this decision: P1 ("boons enable play; fan rewards play") removes scoring as a boon concern, and P15 ("reuse engine primitives") bounds engine surface.
+
+Decision:
+- Boons are pure data records with the shape `{ id, cluster, listens, condition, effect }`. Effect functions call from a fixed primitive vocabulary; no boon mutates engine state directly.
+- The engine emits typed events at well-defined points: `on_player_draw`, `on_player_discard`, `on_chi`/`on_peng`/`on_kong`/`on_ankan`, `on_set_formed`, `on_ting_reached`, `on_hu`, `on_opponent_discard`, `on_opponent_call`, `on_opponent_draw`, plus auto-derived tile-property events (`on_honor_drawn`, `on_dragon_set_formed`, `on_dominant_suit_drawn`, etc.) and per-turn lifecycle events (`on_turn_start`, `on_turn_end`).
+- A registry maps engine events to listening boons. On each event emit, the engine evaluates each listener's `condition`, runs `effect` if true, and applies state mutations atomically.
+- Primitive vocabulary is fixed at seven: `peek_wall`, `live_counter`, `discard_and_redraw`, `swap_hand_for_wall`, `extra_draw`, `reveal_opponent_last_draw`, `take_from_discard_pile`. Plus state utilities for token mechanics (`grant_token`, `spend_token`, `get_tokens`). New primitives are explicitly expensive — adding one requires engine, AI, and UI work.
+- No event bus / emit-chain. Additive synergy comes from multiple listeners on the same engine event, not from boon-to-boon event propagation. This was tested against the mulligan-stacking example: three boons each granting a mulligan condition naturally stack via shared engine events, not via emit-chain.
+- Score modifications by boons are out of scope. HK fan calculation remains the scorer's exclusive domain. The carry-forward mechanism converts native HK fan into the run-level roguelike progression (Curve C: 3 fan = 0 carries, 4-5 = 1, 6-8 = 2, 9-12 = 3, 13+ = 4).
+- Cluster commitment is behavioral, not engine-enforced. Offers at each milestone are 3 random boons drawn from the eligible pool — no cluster-bias on offer composition. The pre-deal starter pick is the player's first boon but does not bias future offers.
+
+Reason:
+- Event-listener fits mahjong's window-based dynamics better than emit/chain. Most natural synergies are of the form "while X is true, Y happens on event Z" — that's state-flag listening, not chain propagation.
+- Pure data registry enables boon library iteration without engine changes. Adding boon #25 = one entry in the registry file. The user-tested grounding principles (P11 accumulating triggers, P12 action density, P14 cluster gates on spend) become design contract checks, not engine refactors.
+- Primitive reuse keeps engine surface bounded. The 24-boon library uses only the 7 primitives plus token state utilities. The architecture supports adding many more boons without engine surface growth.
+- Random offers across clusters maximize per-run variance. With 3 offers and ~9 eligible boons per milestone (~3 per cluster), in-cluster availability is ~76% per fork. Committed cluster play remains viable, and ~24% of forks force pivot decisions — strong roguelike feel.
+- Removing score modifications from the boon contract eliminates the entire class of "did a boon let me Hu illegally?" engine-invariant concerns from D005. The scorer is still the only place fan is computed; boons cannot bypass the 3-fan minimum or change Hu shape validation.
+
+Implications:
+- Adding a new boon = adding a record to `src_tl/content/boons.tl` (the boon registry). No engine code change required if the boon composes from the 7 primitives. Audit against the 16 grounding principles in `MILESTONE-2-PLAN.md` before merging.
+- New primitives require engine, AI awareness, and UI work. M2-S00 implements the 7 fixed primitives; subsequent primitives are tracked as separate engineering proposals.
+- M1's `effect_runner.apply_commands`, the `EffectCommand` types, and the M1 boon modules (`Current`, `Still Water`, `Dragon's Weight`, `Open Eyes`, `Third Eye`, `Fresh Start`, `Momentum`) are removed in M2-S05. Test fixtures migrate to M2 equivalents.
+- The hand-size invariant `hand_size = 13 + (kongs_declared_by_player)` is enforced by the engine at end-of-turn. Boons that draw extra wall tiles must produce a matching extra discard (callable normally). The engine validates this invariant after every state mutation.
+- AI in M2-S08 is currently boon-blind (does not model player boons). Defensive AI awareness of player boons is deferred to M3+.
+- For drastic mechanics (currently only Salvage Hand), the bounded-scope rule (P10) requires: fires on player's own turn, accumulating trigger, and age/recency restrictions that preserve mahjong's call-window invariant. Salvage Hand takes from your own pile (any age) or opponent piles (≥5 table-wide turns old).
