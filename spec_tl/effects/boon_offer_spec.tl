@@ -69,9 +69,11 @@ describe("m2_boons catalog", function()
       m2_boons.register_all()
    end)
 
-   it("registers exactly 6 starter-and-set_1 boons", function()
+   it("registers the current catalog of 8 M2 boons", function()
+      -- S02 baseline: 6 (1 starter + 1 set_1 per cluster). S04 incremental
+      -- additions: honor_sense (set_1+set_2 flex), dragon_pulse (set_2).
       local all = registry.all()
-      assert.are.equal(6, #all)
+      assert.are.equal(8, #all)
    end)
 
    it("find returns the boon for a known id", function()
@@ -100,12 +102,13 @@ describe("boon_offer.eligible_at", function()
       assert.are.same({"hidden_path", "honors_gift", "pure_path"}, ids)
    end)
 
-   it("returns the 3 set_1 boons at milestone set_1", function()
+   it("returns all set_1-eligible boons (honor + suit + concealed)", function()
       local pool = offer.eligible_at("set_1" as MilestoneId, {})
       local ids: {string} = {}
       for _, b in ipairs(pool) do ids[#ids + 1] = b.id end
       table.sort(ids)
-      assert.are.same({"cleanse", "honors_eye", "silent_march"}, ids)
+      -- honor_sense is flex (set_1+set_2) so appears in the set_1 pool.
+      assert.are.same({"cleanse", "honor_sense", "honors_eye", "silent_march"}, ids)
    end)
 
    it("includes flex-eligible boons at multiple milestones", function()
@@ -361,8 +364,10 @@ describe("M2-S03 acceptance — starter does not bias future offers", function()
       -- set_1 pool is the same for all three.
       assert.are.same(seen_pools[1], seen_pools[2])
       assert.are.same(seen_pools[2], seen_pools[3])
-      -- And the pool contains all 3 set_1-eligible M2 boons.
-      assert.are.equal(3, #seen_pools[1])
+      -- Pool contains every set_1-eligible boon — at least the 4 that
+      -- live in the S04 catalog. Asserting ">= 4" rather than a fixed
+      -- count keeps this test robust as more boons land.
+      assert.is_true(#seen_pools[1] >= 4)
    end)
 
    it("compose_offer with a fixed seed yields the same offer regardless of starter pick", function()

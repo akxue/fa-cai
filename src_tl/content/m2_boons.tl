@@ -23,7 +23,57 @@ local function always_true(_ctx: BoonContext, _ev: EventData): boolean
    return true
 end
 
--- ── The 6 S02 boons ──────────────────────────────────────────────────────
+-- ── Helpers used across effect implementations ───────────────────────────
+
+-- Appends each tile's id to the player's known_wall_tile_ids, deduping
+-- against ids already in the list. Used by peek-style boons (Honor's Eye,
+-- Honor Sense, etc.) so repeated emissions against the same wall front
+-- don't pile duplicates into the Known Wall UI strip.
+local function mark_wall_known(ctx: BoonContext, peeked: {Tile})
+   local player = ctx.deal.players[ctx.player_index]
+   for _, t in ipairs(peeked) do
+      local already_known = false
+      for _, id in ipairs(player.known_wall_tile_ids) do
+         if id == t.tile_id then already_known = true; break end
+      end
+      if not already_known then
+         player.known_wall_tile_ids[#player.known_wall_tile_ids + 1] = t.tile_id
+      end
+   end
+end
+
+local DRAGON_KINDS: {string: boolean} = {
+   fa_cai = true, hong_zhong = true, bai_ban = true,
+}
+
+-- ── Effect implementations (S04 — incremental) ───────────────────────────
+
+-- Honor Sense (set_1 / set_2 flex, honor): every 3rd opponent honor
+-- discard you observe, peek the next 2 wall tiles.
+local function effect_honor_sense(ctx: BoonContext, _ev: EventData)
+   local count = ctx:get_counter("opp_honor_discards") + 1
+   ctx:set_counter("opp_honor_discards", count)
+   if count % 3 == 0 then
+      mark_wall_known(ctx, ctx:peek_wall(2))
+   end
+end
+
+-- Dragon Pulse (set_2, honor): every dragon set you form (peng / open
+-- kong / concealed kong), gain 1 mulligan + 1 peek token. The boon
+-- listens on the call events and inspects the tile_set kind to detect
+-- dragons; no separate on_dragon_set_formed event needed.
+local function effect_dragon_pulse(ctx: BoonContext, ev: EventData)
+   local call_ev = ev as CallEvent
+   if #call_ev.tile_set.tiles == 0 then return end
+   if not DRAGON_KINDS[call_ev.tile_set.tiles[1].kind_id as string] then return end
+   -- chi is suited-only, so on_chi can't reach here in practice; defense.
+   if call_ev.tile_set.kind == "chi" then return end
+   ctx:grant_token("mulligan", 1)
+   ctx:grant_token("peek", 1)
+end
+
+-- ── Catalog ──────────────────────────────────────────────────────────────
+-- 6 S02 plumbing-validation boons + S04 additions as effect logic lands.
 
 local BOONS: {Boon} = {
    -- Honor cluster
@@ -50,6 +100,30 @@ local BOONS: {Boon} = {
       listens             = {"on_honor_drawn"},
       condition           = always_true,
       effect              = noop_effect,
+   },
+   {
+      id                  = "honor_sense",
+      cluster             = "honor",
+      name                = "Honor Sense",
+      description         = "Every 3rd opponent honor discard, peek 2 wall tiles.",
+      eligible_milestones = {"set_1", "set_2"},
+      effect_kind         = "peek",
+      weight              = 1.0,
+      listens             = {"on_opponent_honor_discarded"},
+      condition           = always_true,
+      effect              = effect_honor_sense,
+   },
+   {
+      id                  = "dragon_pulse",
+      cluster             = "honor",
+      name                = "Dragon Pulse",
+      description         = "Every dragon set you form (peng/kong), gain 1 mulligan + 1 peek token.",
+      eligible_milestones = {"set_2"},
+      effect_kind         = "token",
+      weight              = 1.0,
+      listens             = {"on_peng", "on_kong", "on_ankan"},
+      condition           = always_true,
+      effect              = effect_dragon_pulse,
    },
 
    -- Suit cluster
