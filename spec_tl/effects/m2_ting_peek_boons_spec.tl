@@ -33,6 +33,7 @@ local function make_deal(p1_concealed: {Tile}, p1_sets: {TileSet}, wall_tiles: {
          seat_wind           = sw as Wind,
          is_human            = human,
          known_wall_tile_ids = {},
+         concealed_pung_kinds_seen = {},
       }
    end
    return {

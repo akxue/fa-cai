@@ -337,6 +337,16 @@ local function effect_pure_vision(ctx: BoonContext, _ev: EventData)
       count_suit_in_tiles(ctx.deal.wall.tiles, suit))
 end
 
+-- Hidden Strength (set_2, concealed): every concealed pung formed (3rd
+-- matching tile present in concealed_tiles at end-of-turn), peek 3 wall
+-- tiles. The engine fires on_concealed_pung_formed once per distinct
+-- kind; a broken-and-reformed pung does not re-trigger (engine-side
+-- guard via PlayerState.concealed_pung_kinds_seen). No boon-side state
+-- needed.
+local function effect_hidden_strength(ctx: BoonContext, _ev: EventData)
+   mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(3))
+end
+
 -- ── Catalog ──────────────────────────────────────────────────────────────
 -- 6 S02 plumbing-validation boons + S04 additions as effect logic lands.
 
@@ -477,6 +487,18 @@ local BOONS: {Boon} = {
       listens             = {"on_player_discard", "on_chi", "on_peng", "on_kong", "on_ankan"},
       condition           = always_true,
       effect              = effect_silent_stand,
+   },
+   {
+      id                  = "hidden_strength",
+      cluster             = "concealed",
+      name                = "Hidden Strength",
+      description         = "Every concealed pung formed in your hand, peek 3 wall tiles.",
+      eligible_milestones = {"set_2"},
+      effect_kind         = "peek",
+      weight              = 1.0,
+      listens             = {"on_concealed_pung_formed"},
+      condition           = always_true,
+      effect              = effect_hidden_strength,
    },
    {
       id                  = "concealed_insight",

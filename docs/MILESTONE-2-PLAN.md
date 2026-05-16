@@ -162,9 +162,18 @@ type EventName =
   | "on_ankan"             -- payload: { tile_set: TileSet }
 
   -- State transitions
-  | "on_set_formed"        -- payload: { set_index: 1|2|3, set: TileSet, kind: SetKind }
-  | "on_ting_reached"      -- payload: { wait_kind: TingShape }
-  | "on_hu"                -- payload: { fan_total: int, hand: HandSnapshot }
+  | "on_set_formed"        -- payload: { set_index: 1|2|3 }
+                           -- The crossed set is implicit; set-detail listeners use the call
+                           -- events (on_chi/on_peng/on_kong/on_ankan) which carry the TileSet.
+                           -- Concealed pungs cross set milestones too (via max_concealed_sets)
+                           -- but have no TileSet representation — they surface via the
+                           -- on_concealed_pung_formed event below.
+  | "on_concealed_pung_formed"   -- payload: { kind_id: TileKindId, tiles: {Tile} }
+                                 -- Fires at deal start and end-of-turn when a 3-of-a-kind is
+                                 -- present in the player's concealed_tiles. Once per kind per
+                                 -- deal; broken-and-reformed pungs do not re-trigger.
+  | "on_ting_reached"      -- payload: {}
+  | "on_hu"                -- payload: { fan_total: int }
 
   -- Opponent events (player observes)
   | "on_opponent_discard"  -- payload: { opponent_index: int, tile: Tile }
