@@ -64,6 +64,7 @@ local function make_deal(
          is_human            = human,
          known_wall_tile_ids = {},
          concealed_pung_kinds_seen = {},
+         turn_extra_discards_owed = 0,
       }
    end
    return {
@@ -628,17 +629,19 @@ describe("deal_engine", function()
             is_human = true,
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
+            turn_extra_discards_owed = 0,
          }
          local empty: PlayerState = {
             hand = { concealed_tiles = {}, sets = {}, discards = {} },
             opening_trim = {}, seat_wind = "south" as Wind, is_human = false,
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
+            turn_extra_discards_owed = 0,
          }
          local d: DealState = {
             players = { p1_state, empty,
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {} },
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {} },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {}, turn_extra_discards_owed = 0 },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {}, turn_extra_discards_owed = 0 },
             },
             wall = { tiles = { tile("bing_9_d", "bing_9") } },  -- supplement
             phase = "awaiting_action" as DealPhase,
@@ -704,17 +707,19 @@ describe("deal_engine", function()
             is_human = true,
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
+            turn_extra_discards_owed = 0,
          }
          local empty: PlayerState = {
             hand = { concealed_tiles = {}, sets = {}, discards = {} },
             opening_trim = {}, seat_wind = "south" as Wind, is_human = false,
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
+            turn_extra_discards_owed = 0,
          }
          local d: DealState = {
             players = { p1_state, empty,
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {} },
-               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {} },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "west" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {}, turn_extra_discards_owed = 0 },
+               { hand = { concealed_tiles = {}, sets = {}, discards = {} }, opening_trim = {}, seat_wind = "north" as Wind, is_human = false, known_wall_tile_ids = {}, concealed_pung_kinds_seen = {}, turn_extra_discards_owed = 0 },
             },
             wall = { tiles = {} },
             phase = "awaiting_action" as DealPhase,

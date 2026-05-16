@@ -84,6 +84,7 @@ local function copy_player(p: PlayerState): PlayerState
       is_human                   = p.is_human,
       known_wall_tile_ids        = copy_tile_ids(p.known_wall_tile_ids),
       concealed_pung_kinds_seen  = copy_kind_ids(p.concealed_pung_kinds_seen),
+      turn_extra_discards_owed   = p.turn_extra_discards_owed,
    }
 end
 
@@ -576,6 +577,7 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
          is_human                   = (i == 1),
          known_wall_tile_ids        = {},
          concealed_pung_kinds_seen  = {},
+         turn_extra_discards_owed   = 0,
       }
    end
 
@@ -771,6 +773,9 @@ local function handle_draw(deal: DealState, action: DrawAction): DealTransition
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true
    d.phase                    = "awaiting_action" as DealPhase
+   -- Reset bonus-discard counter at turn start (defensive: voids any owed
+   -- count left stale by a prior turn ending via call-cuts-in).
+   d.players[action.player_index].turn_extra_discards_owed = 0
 
    local cmds = fx_runner.dispatch_after_draw(d, action.player_index, dr.tile, false)
    local fx_events = fx_runner.apply_commands(d, cmds)
@@ -939,6 +944,7 @@ local function apply_peng(d: DealState, winner_index: integer): DealTransition
    d.phase                    = "awaiting_action" as DealPhase
    d.last_draw_was_supplement = false
    d.has_last_drawn           = false
+   d.players[winner_index].turn_extra_discards_owed = 0   -- new turn via call
    local cmds = fx_runner.dispatch_after_peng(d, winner_index)
    local fx_events = fx_runner.apply_commands(d, cmds)
 
@@ -992,6 +998,7 @@ local function apply_open_kong(d: DealState, winner_index: integer): DealTransit
    if was_empty then return wall_exhaustion(d2) end
    d2.current_player = winner_index
    d2.phase          = "awaiting_action" as DealPhase
+   d2.players[winner_index].turn_extra_discards_owed = 0   -- new turn via open kong
 
    local kong_set = d2.players[winner_index].hand.sets[#d2.players[winner_index].hand.sets]
    if winner_index == PLAYER_OWNER_INDEX then
@@ -1040,6 +1047,7 @@ local function apply_chi(d: DealState, claim: PendingClaim): DealTransition
    d.phase                    = "awaiting_action" as DealPhase
    d.last_draw_was_supplement = false
    d.has_last_drawn           = false
+   d.players[claim.player_index].turn_extra_discards_owed = 0   -- new turn via chi
 
    local chi_set = d.players[claim.player_index].hand.sets[#d.players[claim.player_index].hand.sets]
    if claim.player_index == PLAYER_OWNER_INDEX then
@@ -1074,9 +1082,21 @@ local function apply_all_pass(d: DealState): DealTransition
       d.has_pending_discard = false
       d.pending_claims      = {}
       d.reaction_passes     = {}
-      d.current_player      = (discarder % PLAYER_COUNT) + 1
-      d.phase               = "awaiting_draw" as DealPhase
-      d.has_last_drawn      = false
+      -- Plan B (P8): if the discarder owes more bonus discards from
+      -- extra_draw, hold their turn open. Decrement, return to
+      -- awaiting_action so they pick another discard. Otherwise advance
+      -- to the next seat normally.
+      local owed = d.players[discarder].turn_extra_discards_owed
+      if owed > 0 then
+         d.players[discarder].turn_extra_discards_owed = owed - 1
+         d.current_player = discarder
+         d.phase          = "awaiting_action" as DealPhase
+         d.has_last_drawn = false
+         return ok_t(d, { ev("extra_discard_owed", "player " .. tostring(discarder) .. " owes " .. tostring(owed - 1) .. " more bonus discard(s)") })
+      end
+      d.current_player = (discarder % PLAYER_COUNT) + 1
+      d.phase          = "awaiting_draw" as DealPhase
+      d.has_last_drawn = false
       return ok_t(d, { ev("pass_all", "all passed — discard resolved, player " .. tostring(d.current_player) .. " to draw") })
    end
 

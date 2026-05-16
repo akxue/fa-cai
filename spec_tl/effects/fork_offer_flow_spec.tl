@@ -62,6 +62,7 @@ local function make_deal(
          is_human            = human,
          known_wall_tile_ids = {},
          concealed_pung_kinds_seen = {},
+         turn_extra_discards_owed = 0,
       }
    end
    return {

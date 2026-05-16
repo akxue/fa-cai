@@ -55,6 +55,12 @@ global record PlayerState
    -- event this deal. Permanent within a deal: a pung that is broken and later
    -- reformed does not re-trigger (per Hidden Strength rule, MILESTONE-2-PLAN.md:490).
    concealed_pung_kinds_seen: {TileKindId}
+   -- Number of bonus discards owed this turn. Incremented by extra_draw
+   -- (boon primitive); decremented in apply_all_pass after each player
+   -- discard. Turn-scoped — reset to 0 when the player's turn begins
+   -- (handle_draw and call-apply paths). Per P8 in MILESTONE-2-PLAN.md:417,
+   -- every bonus wall draw must produce a matched discard before turn end.
+   turn_extra_discards_owed: integer
 end
 
 global record DealResult
