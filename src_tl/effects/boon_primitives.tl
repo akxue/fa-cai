@@ -104,16 +104,19 @@ function M.swap_hand_for_wall(ctx: BoonContext, hand_tile_id: TileId): Tile
 end
 
 -- ── 5. extra_draw ─────────────────────────────────────────────────────────
--- Takes an additional wall tile beyond the normal turn draw. Per P8 (plan
--- §415), the caller (or a follow-up boon listener) is responsible for the
--- corresponding extra discard before end-of-turn. The engine validates the
--- 13+kongs invariant when emission wires up in T04.
+-- Takes an additional wall tile beyond the normal turn draw and records a
+-- matching discard obligation on the caller's PlayerState. Per P8
+-- (MILESTONE-2-PLAN.md:417), every bonus wall tile demands a matching
+-- discard before turn end; the engine drives the loop by re-entering
+-- awaiting_action after each owed discard's reaction window resolves
+-- with all-pass (deal_engine.apply_all_pass).
 function M.extra_draw(ctx: BoonContext): Tile
-   local hand = ctx.deal.players[ctx.player_index].hand
+   local player = ctx.deal.players[ctx.player_index]
    assert(wall_mod.remaining(ctx.deal.wall) > 0, "extra_draw: wall is empty")
    local draw = wall_mod.draw_front(ctx.deal.wall)
    ctx.deal.wall = draw.wall
-   hand.concealed_tiles[#hand.concealed_tiles + 1] = draw.tile
+   player.hand.concealed_tiles[#player.hand.concealed_tiles + 1] = draw.tile
+   player.turn_extra_discards_owed = player.turn_extra_discards_owed + 1
    return draw.tile
 end
 
