@@ -79,6 +79,55 @@ local function is_fully_concealed(hand: PlayerHand): boolean
    return true
 end
 
+-- Suited tile-kind prefixes. Used by dominant-suit detection for the
+-- suit cluster boons (Pure Path, Pure Vision, etc.).
+local SUITED_PREFIXES: {string} = {"tiao", "wan", "bing"}
+
+-- Encoding for storing dominant suit in counters[]. Integer counter
+-- values translate to suit strings via IDX_TO_SUIT. ActiveBoon's
+-- counters/flags/tokens are typed as integer/boolean/integer respectively
+-- — there's no native string-state slot, so we encode.
+local SUIT_TO_IDX: {string: integer} = { tiao = 1, wan = 2, bing = 3 }
+local IDX_TO_SUIT: {integer: string} = { [1] = "tiao", [2] = "wan", [3] = "bing" }
+
+-- Returns the player's most-numerous suit in their concealed hand +
+-- set tiles. Ties broken canonically tiao > wan > bing. Honors are
+-- never returned (suit cluster boons key off "suit" specifically).
+local function dominant_suit_of_hand(hand: PlayerHand): string
+   local counts: {string: integer} = { tiao = 0, wan = 0, bing = 0 }
+   local function bump(kind_id: string)
+      for _, p in ipairs(SUITED_PREFIXES) do
+         if kind_id:sub(1, #p) == p then
+            counts[p] = (counts[p] or 0) + 1
+            return
+         end
+      end
+   end
+   for _, t in ipairs(hand.concealed_tiles) do
+      bump(t.kind_id as string)
+   end
+   for _, s in ipairs(hand.sets) do
+      for _, t in ipairs(s.tiles) do
+         bump(t.kind_id as string)
+      end
+   end
+   local best_suit = "tiao"
+   local best_count = counts["tiao"]
+   if (counts["wan"]  or 0) > best_count then best_suit = "wan";  best_count = counts["wan"]  end
+   if (counts["bing"] or 0) > best_count then best_suit = "bing"; best_count = counts["bing"] end
+   return best_suit
+end
+
+-- Counts tiles whose kind_id begins with the given suit prefix.
+local function count_suit_in_tiles(tiles_list: {Tile}, suit: string): integer
+   local n = 0
+   for _, t in ipairs(tiles_list) do
+      local k = t.kind_id as string
+      if k:sub(1, #suit) == suit then n = n + 1 end
+   end
+   return n
+end
+
 -- ── Effect implementations (S04 — incremental) ───────────────────────────
 --
 -- Each implemented boon converts its `effect` from `noop_effect` to a real
@@ -251,6 +300,43 @@ local function effect_closed_eye(ctx: BoonContext, ev: EventData)
    end
 end
 
+-- Pure Path (starter, suit): at deal start, auto-pick the player's
+-- dominant suit (most-numerous in starting hand, ties tiao>wan>bing)
+-- and snapshot the opponent dominant-suit counts. Plan §473 calls for
+-- a player prompt to choose the suit; the auto-pick is a defensible
+-- default until the prompt UI ships.
+--
+-- Stored state (on the ActiveBoon):
+--   counters["dominant_suit_idx"]  — 1=tiao / 2=wan / 3=bing
+--   counters["opp_2_count"]         — opponent seat 2's count of suit
+--   counters["opp_3_count"]         — opponent seat 3's count of suit
+--   counters["opp_4_count"]         — opponent seat 4's count of suit
+local function effect_pure_path(ctx: BoonContext, _ev: EventData)
+   local hand = ctx.deal.players[ctx.player_index].hand
+   local suit = dominant_suit_of_hand(hand)
+   ctx:set_counter("dominant_suit_idx", SUIT_TO_IDX[suit] or 0)
+   for opp = 1, 4 do
+      if opp ~= ctx.player_index then
+         local opp_hand = ctx.deal.players[opp].hand
+         ctx:set_counter("opp_" .. tostring(opp) .. "_count",
+            count_suit_in_tiles(opp_hand.concealed_tiles, suit))
+      end
+   end
+end
+
+-- Pure Vision (set_2, suit): live count of dominant-suit tiles remaining
+-- in the wall. Recomputes the count on every on_player_draw and stores
+-- it on counters["wall_dominant_count"] for the UI/debug surface to
+-- read. Dominant suit is computed independently from the player's
+-- current hand each time (S04 simplification — see plan §476 note).
+local function effect_pure_vision(ctx: BoonContext, _ev: EventData)
+   local hand = ctx.deal.players[ctx.player_index].hand
+   local suit = dominant_suit_of_hand(hand)
+   ctx:set_counter("dominant_suit_idx", SUIT_TO_IDX[suit] or 0)
+   ctx:set_counter("wall_dominant_count",
+      count_suit_in_tiles(ctx.deal.wall.tiles, suit))
+end
+
 -- ── Catalog ──────────────────────────────────────────────────────────────
 -- 6 S02 plumbing-validation boons + S04 additions as effect logic lands.
 
@@ -328,7 +414,19 @@ local BOONS: {Boon} = {
       weight              = 1.0,
       listens             = {"on_deal_start"},
       condition           = always_true,
-      effect              = noop_effect,
+      effect              = effect_pure_path,
+   },
+   {
+      id                  = "pure_vision",
+      cluster             = "suit",
+      name                = "Pure Vision",
+      description         = "Live count of dominant-suit tiles remaining in the wall.",
+      eligible_milestones = {"set_2"},
+      effect_kind         = "info",
+      weight              = 1.0,
+      listens             = {"on_player_draw"},
+      condition           = always_true,
+      effect              = effect_pure_vision,
    },
    {
       id                  = "cleanse",
