@@ -257,13 +257,168 @@ describe("engine: on_concealed_pung_formed emission", function()
       local r = engine.apply_action(deal, engine.discard(1, "wan_9_a" as TileId))
       assert.is_true(r.ok, r.error)
       assert.are.equal(2, #observed)
-      -- Order is map-iteration-dependent; check membership.
-      local saw_east, saw_tiao = false, false
-      for _, k in ipairs(observed) do
-         if k == "east"   then saw_east = true end
-         if k == "tiao_5" then saw_tiao = true end
+      -- Engine sorts eligible kinds before emission, so the order is stable
+      -- across runs. Sort: "east" < "tiao_5" lexicographically.
+      assert.are.same({"east", "tiao_5"}, observed)
+   end)
+
+   it("does NOT fire when no kind has count >= 3", function()
+      -- Sanity baseline: pair-only + singletons should produce zero events.
+      local active, observed = record_pung_events()
+      local p1 = tiles({
+         {"east_a","east"}, {"east_b","east"},                       -- pair only
+         {"tiao_1_a","tiao_1"}, {"tiao_2_a","tiao_2"}, {"tiao_3_a","tiao_3"},
+         {"tiao_4_a","tiao_4"}, {"tiao_5_a","tiao_5"}, {"tiao_6_a","tiao_6"},
+         {"tiao_7_a","tiao_7"}, {"tiao_8_a","tiao_8"}, {"tiao_9_a","tiao_9"},
+         {"bing_1_a","bing_1"}, {"bing_2_a","bing_2"}, {"wan_9_a","wan_9"},
+      })
+      local deal = make_deal(p1, {})
+      deal.active_boons[#deal.active_boons + 1] = active
+
+      local r = engine.apply_action(deal, engine.discard(1, "wan_9_a" as TileId))
+      assert.is_true(r.ok, r.error)
+      assert.are.same({}, observed)
+   end)
+
+   it("fires exactly once for a 4-of-a-kind in hand and seen-set records the kind", function()
+      -- 4 east + 10 fillers. After discard, 4 easts remain in concealed;
+      -- count=4 still satisfies c>=3 and the event must fire once for east
+      -- with tiles slice capped at 3.
+      local active, observed = record_pung_events()
+      local capture_tiles: {{Tile}} = {}
+      local capture_b: Boon = {
+         id = "capture", cluster = "concealed", name = "capture",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_concealed_pung_formed"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, ev: EventData)
+            local cp = ev as ConcealedPungFormedEvent
+            capture_tiles[#capture_tiles + 1] = cp.tiles
+         end,
+      }
+      registry.register(capture_b)
+
+      local p1 = tiles({
+         {"east_a","east"}, {"east_b","east"}, {"east_c","east"}, {"east_d","east"},
+         {"tiao_1_a","tiao_1"}, {"tiao_2_a","tiao_2"}, {"tiao_3_a","tiao_3"},
+         {"tiao_4_a","tiao_4"}, {"tiao_5_a","tiao_5"}, {"tiao_6_a","tiao_6"},
+         {"bing_1_a","bing_1"}, {"bing_2_a","bing_2"}, {"bing_3_a","bing_3"},
+         {"wan_9_a","wan_9"},
+      })
+      local deal = make_deal(p1, {})
+      deal.active_boons[#deal.active_boons + 1] = active
+      deal.active_boons[#deal.active_boons + 1] =
+         context.new_active("capture", "starter" as AcquisitionPoint)
+
+      local r = engine.apply_action(deal, engine.discard(1, "wan_9_a" as TileId))
+      assert.is_true(r.ok, r.error)
+      assert.are.same({"east"}, observed)
+      assert.are.equal(1, #capture_tiles)
+      assert.are.equal(3, #capture_tiles[1])
+      assert.are.equal(1, #r.deal.players[1].concealed_pung_kinds_seen)
+
+      -- Drop one east to 3, then discard — still in seen, must NOT re-fire.
+      local d2 = r.deal
+      d2.phase = "awaiting_action" as DealPhase
+      d2.current_player = 1
+      d2.has_pending_discard = false
+      d2.reaction_passes = {}
+      d2.pending_claims = {}
+      d2.players[1].hand.concealed_tiles = tiles({
+         {"east_a","east"}, {"east_b","east"}, {"east_c","east"},      -- 3 easts
+         {"tiao_1_a","tiao_1"}, {"tiao_2_a","tiao_2"}, {"tiao_3_a","tiao_3"},
+         {"tiao_4_a","tiao_4"}, {"tiao_5_a","tiao_5"}, {"tiao_6_a","tiao_6"},
+         {"bing_1_a","bing_1"}, {"bing_2_a","bing_2"}, {"bing_3_a","bing_3"},
+         {"wan_1_a","wan_1"}, {"wan_2_a","wan_2"},
+      })
+      local r2 = engine.apply_action(d2, engine.discard(1, "wan_2_a" as TileId))
+      assert.is_true(r2.ok, r2.error)
+      assert.are.same({"east"}, observed)   -- still only the original event
+   end)
+end)
+
+-- ── Deal-start emission path ─────────────────────────────────────────────
+
+describe("on_concealed_pung_formed at deal start", function()
+   local run_state = require("game.run_state")
+
+   before_each(function()
+      registry.reset()
+   end)
+
+   it("fires once at deal start when the opening hand already contains a pung", function()
+      -- Drive via engine.new_deal_with_run with a recording boon attached to
+      -- the run. The opening hand is determined by the seed; we sample seeds
+      -- until we find one where p1 opens with a triplet, then assert the
+      -- event fires for that kind. The boon is added BEFORE start so the
+      -- on_deal_start emission path picks it up.
+      local active, observed = record_pung_events()
+      local rs = run_state.new_run(rng_mod.from_seed(1))
+      rs.active_boons[#rs.active_boons + 1] = active
+
+      local found_seed = -1
+      local found_kind: string = ""
+      for s = 1, 200 do
+         local deal_probe = engine.new_deal(rng_mod.from_seed(s))
+         local counts: {string:integer} = {}
+         for _, t in ipairs(deal_probe.players[1].hand.concealed_tiles) do
+            counts[t.kind_id as string] = (counts[t.kind_id as string] or 0) + 1
+         end
+         for k, c in pairs(counts) do
+            if c >= 3 then found_seed = s; found_kind = k; break end
+         end
+         if found_seed > 0 then break end
       end
-      assert.is_true(saw_east)
-      assert.is_true(saw_tiao)
+      assert.is_true(found_seed > 0, "no seed produced opening triplet in 200 tries")
+
+      local rs2 = run_state.new_run(rng_mod.from_seed(found_seed))
+      rs2.active_boons[#rs2.active_boons + 1] = active
+      engine.new_deal_with_run(rng_mod.from_seed(found_seed), rs2)
+      -- Observed must contain found_kind (and possibly more if multiple
+      -- triplets opened).
+      local saw = false
+      for _, k in ipairs(observed) do
+         if k == found_kind then saw = true end
+      end
+      assert.is_true(saw, "expected event for kind " .. found_kind)
+   end)
+end)
+
+-- ── Event ordering: pung event precedes on_set_formed ─────────────────────
+
+describe("on_concealed_pung_formed ordering vs on_set_formed", function()
+   before_each(function()
+      registry.reset()
+   end)
+
+   it("fires the pung event before the set_formed event for a crossing-discard", function()
+      -- Build a hand where the player's discard SIMULTANEOUSLY (a) leaves a
+      -- concealed pung in hand (fires on_concealed_pung_formed) AND (b)
+      -- crosses set_count_high_water from 0 to 1 (fires on_set_formed).
+      -- A pung counts as a set per total_set_count, so a single concealed
+      -- pung at end-of-turn-discard is exactly this case.
+      local sequence: {string} = {}
+      local watcher: Boon = {
+         id = "watcher", cluster = "honor", name = "watcher",
+         description = "", eligible_milestones = {"starter"},
+         effect_kind = "info", weight = 1.0,
+         listens = {"on_concealed_pung_formed", "on_set_formed"},
+         condition = function(_c: BoonContext, _e: EventData): boolean return true end,
+         effect    = function(_c: BoonContext, ev: EventData)
+            sequence[#sequence + 1] = ev.event_name as string
+         end,
+      }
+      registry.register(watcher)
+
+      local active = context.new_active("watcher", "starter" as AcquisitionPoint)
+      local deal = make_deal(p1_with_east_pung_plus_discard(), {})
+      deal.active_boons[#deal.active_boons + 1] = active
+
+      local r = engine.apply_action(deal, engine.discard(1, "wan_9_a" as TileId))
+      assert.is_true(r.ok, r.error)
+      assert.is_true(#sequence >= 2)
+      assert.are.equal("on_concealed_pung_formed", sequence[1])
+      assert.are.equal("on_set_formed", sequence[2])
    end)
 end)

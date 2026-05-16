@@ -301,17 +301,24 @@ local function emit_concealed_pung_events(d: DealState)
    for _, k in ipairs(p.concealed_pung_kinds_seen) do
       seen_set[k as string] = true
    end
+   -- Sort eligible kinds for deterministic emission order. pairs() iteration
+   -- in Lua is unspecified; sorted order keeps multi-pung emission
+   -- reproducible across runs (and across listeners with side effects).
+   local eligible: {string} = {}
    for k, c in pairs(counts) do
       if c >= 3 and not seen_set[k] then
-         local ev: ConcealedPungFormedEvent = {
-            event_name = "on_concealed_pung_formed",
-            kind_id    = k as TileKindId,
-            tiles      = samples[k],
-         }
-         emit_event(d, ev as EventData)
-         p.concealed_pung_kinds_seen[#p.concealed_pung_kinds_seen + 1] = k as TileKindId
-         seen_set[k] = true
+         eligible[#eligible + 1] = k
       end
+   end
+   table.sort(eligible)
+   for _, k in ipairs(eligible) do
+      local ev: ConcealedPungFormedEvent = {
+         event_name = "on_concealed_pung_formed",
+         kind_id    = k as TileKindId,
+         tiles      = samples[k],
+      }
+      emit_event(d, ev as EventData)
+      p.concealed_pung_kinds_seen[#p.concealed_pung_kinds_seen + 1] = k as TileKindId
    end
 end
 
@@ -1115,6 +1122,7 @@ local function apply_all_pass(d: DealState): DealTransition
             kong_kind     = "added",
          }
          emit_event(d2, ev_kong as EventData)
+         emit_concealed_pung_events(d2)   -- supplement may form a new concealed pung
       else
          local ev_kong: OpponentCallEvent = {
             event_name     = "on_opponent_call",
@@ -1451,6 +1459,7 @@ local function handle_concealed_kong(deal: DealState, action: DeclareConcealedKo
          kong_kind     = "",
       }
       emit_event(d2, ev_ankan as EventData)
+      emit_concealed_pung_events(d2)   -- supplement may form a new concealed pung
    else
       local ev_ankan: OpponentCallEvent = {
          event_name     = "on_opponent_call",
