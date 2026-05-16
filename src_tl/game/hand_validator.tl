@@ -338,6 +338,78 @@ function M.find_win_shapes(
    return results
 end
 
+-- All 34 distinct tile kinds (9 tiao + 9 wan + 9 bing + 4 winds + 3 dragons).
+-- Inlined here so compute_waits doesn't pull a runtime dependency on the
+-- tiles module — keeps hand_validator's import surface to types only.
+local ALL_KINDS: {string} = {
+   "tiao_1","tiao_2","tiao_3","tiao_4","tiao_5","tiao_6","tiao_7","tiao_8","tiao_9",
+   "wan_1", "wan_2", "wan_3", "wan_4", "wan_5", "wan_6", "wan_7", "wan_8", "wan_9",
+   "bing_1","bing_2","bing_3","bing_4","bing_5","bing_6","bing_7","bing_8","bing_9",
+   "east","south","west","north",
+   "fa_cai","hong_zhong","bai_ban",
+}
+
+-- Wait-shape result: which tile kind completes the hand, and the resulting
+-- WinShape (carries pair_kind, sets, and shape kind). One entry per distinct
+-- (completing_kind × valid WinShape) — a single kind can complete more than
+-- one valid shape (e.g., standard + seven_pairs).
+global record WaitShape
+   completing_kind: TileKindId
+   win_shape:       WinShape
+end
+
+-- Returns the set of tile kinds that would complete the given 13-tile hand
+-- into a valid winning shape. Empty result means the hand is not at ting.
+-- Implementation: brute-force probe each of the 34 distinct kinds against
+-- find_win_shapes; collect kinds whose synthetic completion yields ≥1 shape.
+--
+-- Cost: 34 × find_win_shapes per call. Acceptable for boon evaluation at
+-- ting (fires once per on_ting_reached) and for the per-turn peek path
+-- (Suit Sentry / Sacred Eye). The synthetic tile is constructed locally
+-- and never enters game state; its tile_id is a recognizable sentinel so
+-- callers that pass result tiles back through state-mutating paths fail
+-- loudly rather than silently corrupting.
+function M.compute_waits(concealed_tiles: {Tile}, open_sets: {TileSet}): {TileKindId}
+   local seen: {string:boolean} = {}
+   local out: {TileKindId} = {}
+   for _, kind in ipairs(ALL_KINDS) do
+      if not seen[kind] then
+         local incoming: Tile = {
+            tile_id = ("__wait_probe__:" .. kind) as TileId,
+            kind_id = kind as TileKindId,
+         }
+         local shapes = M.find_win_shapes(concealed_tiles, incoming, open_sets)
+         if #shapes > 0 then
+            seen[kind] = true
+            out[#out + 1] = kind as TileKindId
+         end
+      end
+   end
+   return out
+end
+
+-- Returns one entry per (completing_kind × valid WinShape) for the given
+-- 13-tile hand. Use this when the caller needs richer info than the
+-- completing kind alone — e.g., Sacred Eye checking whether the winning
+-- shape's pair is an honor (win_shape.pair_kind).
+function M.compute_wait_shapes(concealed_tiles: {Tile}, open_sets: {TileSet}): {WaitShape}
+   local out: {WaitShape} = {}
+   for _, kind in ipairs(ALL_KINDS) do
+      local incoming: Tile = {
+         tile_id = ("__wait_probe__:" .. kind) as TileId,
+         kind_id = kind as TileKindId,
+      }
+      local shapes = M.find_win_shapes(concealed_tiles, incoming, open_sets)
+      for _, s in ipairs(shapes) do
+         out[#out + 1] = {
+            completing_kind = kind as TileKindId,
+            win_shape       = s,
+         }
+      end
+   end
+   return out
+end
+
 -- Returns true if the tile kind is an honor.
 function M.is_honor(kind_id: TileKindId): boolean
    return HONOR_KINDS[kind_id as string] == true
