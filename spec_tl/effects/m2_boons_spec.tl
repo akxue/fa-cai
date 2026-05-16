@@ -38,6 +38,7 @@ local function make_deal_with_wall(p1_hand: {Tile}, wall_tiles: {Tile}): DealSta
          seat_wind           = sw as Wind,
          is_human            = human,
          known_wall_tile_ids = {},
+         concealed_pung_kinds_seen = {},
       }
    end
    return {

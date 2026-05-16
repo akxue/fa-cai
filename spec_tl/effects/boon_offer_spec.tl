@@ -24,6 +24,7 @@ local function empty_deal(): DealState
          seat_wind           = "east" as Wind,
          is_human            = false,
          known_wall_tile_ids = {},
+         concealed_pung_kinds_seen = {},
       }
    end
    return {
@@ -69,12 +70,12 @@ describe("m2_boons catalog", function()
       m2_boons.register_all()
    end)
 
-   it("registers the current catalog of 13 M2 boons", function()
+   it("registers the current catalog of 14 M2 boons", function()
       -- S02 baseline: 6 (1 starter + 1 set_1 per cluster). S04 additions:
       -- honor_sense, dragon_pulse, silent_stand, concealed_insight,
-      -- honor_sanctum, closed_eye, pure_vision.
+      -- honor_sanctum, closed_eye, pure_vision, hidden_strength.
       local all = registry.all()
-      assert.are.equal(13, #all)
+      assert.are.equal(14, #all)
    end)
 
    it("find returns the boon for a known id", function()

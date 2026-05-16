@@ -67,6 +67,18 @@ global record SetFormedEvent
    set_index:  integer       -- 1, 2, or 3 — the milestone threshold crossed
 end
 
+-- Fires at end-of-turn (after the player's own discard) and once at deal start
+-- when a 3rd matching tile is present in the player's concealed_tiles. Fires
+-- exactly once per distinct kind per deal — a pung broken and later reformed
+-- does NOT re-trigger (Hidden Strength contract, MILESTONE-2-PLAN.md:490).
+-- Concealed pungs only "exist" implicitly in concealed_tiles; they are not
+-- materialized as TileSet records, so this event is the only signal for them.
+global record ConcealedPungFormedEvent
+   event_name: EventName     -- "on_concealed_pung_formed"
+   kind_id:    TileKindId    -- the tile kind whose 3-of-a-kind formed
+   tiles:      {Tile}        -- the three tiles composing the pung
+end
+
 global record TingReachedEvent
    event_name: EventName     -- "on_ting_reached"
 end

@@ -51,6 +51,10 @@ global record PlayerState
    seat_wind:            Wind
    is_human:             boolean
    known_wall_tile_ids:  {TileId} -- per-seat wall visibility from info effects (Third Eye, Open Eyes)
+   -- Tile kinds for which a concealed pung has fired its on_concealed_pung_formed
+   -- event this deal. Permanent within a deal: a pung that is broken and later
+   -- reformed does not re-trigger (per Hidden Strength rule, MILESTONE-2-PLAN.md:490).
+   concealed_pung_kinds_seen: {TileKindId}
 end
 
 global record DealResult

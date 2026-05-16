@@ -70,13 +70,20 @@ local function copy_hand(h: PlayerHand): PlayerHand
    }
 end
 
+local function copy_kind_ids(ids: {TileKindId}): {TileKindId}
+   local out: {TileKindId} = {}
+   for _, id in ipairs(ids) do out[#out + 1] = id end
+   return out
+end
+
 local function copy_player(p: PlayerState): PlayerState
    return {
-      hand                = copy_hand(p.hand),
-      opening_trim        = copy_tiles(p.opening_trim),
-      seat_wind           = p.seat_wind,
-      is_human            = p.is_human,
-      known_wall_tile_ids = copy_tile_ids(p.known_wall_tile_ids),
+      hand                       = copy_hand(p.hand),
+      opening_trim               = copy_tiles(p.opening_trim),
+      seat_wind                  = p.seat_wind,
+      is_human                   = p.is_human,
+      known_wall_tile_ids        = copy_tile_ids(p.known_wall_tile_ids),
+      concealed_pung_kinds_seen  = copy_kind_ids(p.concealed_pung_kinds_seen),
    }
 end
 
@@ -270,6 +277,49 @@ local function materialize_next_offer(d: DealState)
       -- Empty offer for this fork — skip and try the next queued milestone.
    end
    d.pending_offer_milestone = "" as MilestoneId
+end
+
+-- Scans the player's concealed_tiles for newly-present 3-of-a-kind groups and
+-- emits on_concealed_pung_formed for each kind not previously seen this deal.
+-- Records seen kinds permanently on PlayerState so a broken-and-reformed pung
+-- does not re-trigger (Hidden Strength contract).
+local function emit_concealed_pung_events(d: DealState)
+   local p = d.players[PLAYER_OWNER_INDEX]
+   local counts: {string:integer} = {}
+   local samples: {string:{Tile}} = {}
+   for _, t in ipairs(p.hand.concealed_tiles) do
+      local k = t.kind_id as string
+      counts[k] = (counts[k] or 0) + 1
+      local sample = samples[k]
+      if sample == nil then
+         sample = {}
+         samples[k] = sample
+      end
+      if #sample < 3 then sample[#sample + 1] = t end
+   end
+   local seen_set: {string:boolean} = {}
+   for _, k in ipairs(p.concealed_pung_kinds_seen) do
+      seen_set[k as string] = true
+   end
+   -- Sort eligible kinds for deterministic emission order. pairs() iteration
+   -- in Lua is unspecified; sorted order keeps multi-pung emission
+   -- reproducible across runs (and across listeners with side effects).
+   local eligible: {string} = {}
+   for k, c in pairs(counts) do
+      if c >= 3 and not seen_set[k] then
+         eligible[#eligible + 1] = k
+      end
+   end
+   table.sort(eligible)
+   for _, k in ipairs(eligible) do
+      local ev: ConcealedPungFormedEvent = {
+         event_name = "on_concealed_pung_formed",
+         kind_id    = k as TileKindId,
+         tiles      = samples[k],
+      }
+      emit_event(d, ev as EventData)
+      p.concealed_pung_kinds_seen[#p.concealed_pung_kinds_seen + 1] = k as TileKindId
+   end
 end
 
 local function evaluate_milestones(d: DealState)
@@ -520,11 +570,12 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
          w = dr.wall
       end
       players[i] = {
-         hand                = { concealed_tiles = hand_tiles, sets = {}, discards = {} },
-         opening_trim        = {},
-         seat_wind           = SEAT_WINDS[i],
-         is_human            = (i == 1),
-         known_wall_tile_ids = {},
+         hand                       = { concealed_tiles = hand_tiles, sets = {}, discards = {} },
+         opening_trim               = {},
+         seat_wind                  = SEAT_WINDS[i],
+         is_human                   = (i == 1),
+         known_wall_tile_ids        = {},
+         concealed_pung_kinds_seen  = {},
       }
    end
 
@@ -584,6 +635,7 @@ function M.new_deal_with_run(rng: RngState, run_state: RunState): DealState
 
    local ev_start: DealLifecycleEvent = { event_name = "on_deal_start" }
    emit_event(d, ev_start as EventData)
+   emit_concealed_pung_events(d)
 
    return d
 end
@@ -770,6 +822,7 @@ local function handle_discard(deal: DealState, action: DiscardAction): DealTrans
       local ev_disc: PlayerDiscardEvent = { event_name = "on_player_discard", tile = tile_obj }
       emit_event(d, ev_disc as EventData)
       emit_player_discard_derived(d, tile_obj)
+      emit_concealed_pung_events(d)
       evaluate_milestones(d)
    else
       local ev_disc: OpponentDiscardEvent = {
@@ -1069,6 +1122,7 @@ local function apply_all_pass(d: DealState): DealTransition
             kong_kind     = "added",
          }
          emit_event(d2, ev_kong as EventData)
+         emit_concealed_pung_events(d2)   -- supplement may form a new concealed pung
       else
          local ev_kong: OpponentCallEvent = {
             event_name     = "on_opponent_call",
@@ -1405,6 +1459,7 @@ local function handle_concealed_kong(deal: DealState, action: DeclareConcealedKo
          kong_kind     = "",
       }
       emit_event(d2, ev_ankan as EventData)
+      emit_concealed_pung_events(d2)   -- supplement may form a new concealed pung
    else
       local ev_ankan: OpponentCallEvent = {
          event_name     = "on_opponent_call",
