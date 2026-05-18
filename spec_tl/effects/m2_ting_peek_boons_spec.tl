@@ -35,6 +35,7 @@ local function make_deal(p1_concealed: {Tile}, p1_sets: {TileSet}, wall_tiles: {
          known_wall_tile_ids = {},
          concealed_pung_kinds_seen = {},
          turn_extra_discards_owed = 0,
+         last_drawn_tile_id = "" as TileId,
       }
    end
    return {

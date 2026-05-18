@@ -61,6 +61,12 @@ global record PlayerState
    -- (handle_draw and call-apply paths). Per P8 in MILESTONE-2-PLAN.md:417,
    -- every bonus wall draw must produce a matched discard before turn end.
    turn_extra_discards_owed: integer
+   -- Most recent wall-draw tile_id for this seat. Persists across the
+   -- deal (overwritten only on this seat's next draw). Distinct from the
+   -- deal-level `last_drawn_tile_id`, which is overwritten on every draw
+   -- from any seat. Surfaces per-opp draw info for boons like Sacred Eye.
+   -- Empty string when the seat has not drawn yet.
+   last_drawn_tile_id: TileId
 end
 
 global record DealResult
