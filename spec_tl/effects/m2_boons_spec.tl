@@ -40,6 +40,7 @@ local function make_deal_with_wall(p1_hand: {Tile}, wall_tiles: {Tile}): DealSta
          known_wall_tile_ids = {},
          concealed_pung_kinds_seen = {},
          turn_extra_discards_owed = 0,
+         last_drawn_tile_id = "" as TileId,
       }
    end
    return {

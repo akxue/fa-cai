@@ -391,6 +391,33 @@ local function effect_pure_vision(ctx: BoonContext, _ev: EventData)
       count_suit_in_tiles(ctx.deal.wall.tiles, suit))
 end
 
+-- Sacred Eye (ting, honor): when you reach ting where your winning
+-- hand's pair is honors, see all opponents' last drawn tiles for the
+-- rest of the deal. Uses Plan C's compute_wait_shapes to inspect
+-- pair_kind per wait shape; if ANY shape pairs on an honor, latch
+-- flags["active"] = true.
+--
+-- Storage for opp draws: engine tracks per-seat last_drawn_tile_id on
+-- PlayerState (added alongside this boon). The boon itself just
+-- latches the flag; UI/debug surfaces read each opponent's
+-- last_drawn_tile_id when active, gated on the flag.
+local function effect_sacred_eye(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name ~= "on_ting_reached" then return end
+   local hand = ctx.deal.players[ctx.player_index].hand
+   local shapes = validator.compute_wait_shapes(hand.concealed_tiles, hand.sets)
+   if #shapes == 0 then return end
+   local any_honor_pair = false
+   for _, ws in ipairs(shapes) do
+      if HONOR_KINDS[ws.win_shape.pair_kind as string] then
+         any_honor_pair = true; break
+      end
+   end
+   if any_honor_pair then
+      ctx:set_flag("active", true)
+   end
+end
+
 -- Suit Sentry (ting, suit): when you reach ting on a "pure dominant-
 -- suit wait" (every completing tile kind is in the dominant suit), peek
 -- 1 wall tile each turn for the rest of the deal. Two-phase latch
@@ -767,6 +794,18 @@ local BOONS: {Boon} = {
       listens             = {"on_peng", "on_kong", "on_ankan"},
       condition           = always_true,
       effect              = effect_honor_heart,
+   },
+   {
+      id                  = "sacred_eye",
+      cluster             = "honor",
+      name                = "Sacred Eye",
+      description         = "When you reach ting where your winning hand's pair is honors, see all opponents' last drawn tiles for the rest of the deal.",
+      eligible_milestones = {"ting"},
+      effect_kind         = "info",
+      weight              = 1.0,
+      listens             = {"on_ting_reached"},
+      condition           = always_true,
+      effect              = effect_sacred_eye,
    },
 
    -- Suit cluster

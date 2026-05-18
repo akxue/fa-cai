@@ -26,6 +26,7 @@ local function empty_deal(): DealState
          known_wall_tile_ids = {},
          concealed_pung_kinds_seen = {},
          turn_extra_discards_owed = 0,
+         last_drawn_tile_id = "" as TileId,
       }
    end
    return {
@@ -71,14 +72,14 @@ describe("m2_boons catalog", function()
       m2_boons.register_all()
    end)
 
-   it("registers the current catalog of 20 M2 boons", function()
+   it("registers the current catalog of 21 M2 boons", function()
       -- S02 baseline: 6 (1 starter + 1 set_1 per cluster). S04 additions:
       -- honor_sense, dragon_pulse, silent_stand, concealed_insight,
       -- honor_sanctum, closed_eye, pure_vision, hidden_strength,
       -- honor_hunt, honor_heart, suit_sentry, concealed_mulligan,
-      -- suit_bind, suit_beacon.
+      -- suit_bind, suit_beacon, sacred_eye.
       local all = registry.all()
-      assert.are.equal(20, #all)
+      assert.are.equal(21, #all)
    end)
 
    it("find returns the boon for a known id", function()

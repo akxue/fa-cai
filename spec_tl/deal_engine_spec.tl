@@ -65,6 +65,7 @@ local function make_deal(
          known_wall_tile_ids = {},
          concealed_pung_kinds_seen = {},
          turn_extra_discards_owed = 0,
+         last_drawn_tile_id = "" as TileId,
       }
    end
    return {
@@ -630,6 +631,7 @@ describe("deal_engine", function()
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
             turn_extra_discards_owed = 0,
+            last_drawn_tile_id = "" as TileId,
          }
          local empty: PlayerState = {
             hand = { concealed_tiles = {}, sets = {}, discards = {} },
@@ -637,6 +639,7 @@ describe("deal_engine", function()
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
             turn_extra_discards_owed = 0,
+            last_drawn_tile_id = "" as TileId,
          }
          local d: DealState = {
             players = { p1_state, empty,
@@ -708,6 +711,7 @@ describe("deal_engine", function()
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
             turn_extra_discards_owed = 0,
+            last_drawn_tile_id = "" as TileId,
          }
          local empty: PlayerState = {
             hand = { concealed_tiles = {}, sets = {}, discards = {} },
@@ -715,6 +719,7 @@ describe("deal_engine", function()
             known_wall_tile_ids = {},
             concealed_pung_kinds_seen = {},
             turn_extra_discards_owed = 0,
+            last_drawn_tile_id = "" as TileId,
          }
          local d: DealState = {
             players = { p1_state, empty,

@@ -85,6 +85,7 @@ local function copy_player(p: PlayerState): PlayerState
       known_wall_tile_ids        = copy_tile_ids(p.known_wall_tile_ids),
       concealed_pung_kinds_seen  = copy_kind_ids(p.concealed_pung_kinds_seen),
       turn_extra_discards_owed   = p.turn_extra_discards_owed,
+      last_drawn_tile_id         = p.last_drawn_tile_id,
    }
 end
 
@@ -535,6 +536,7 @@ local function draw_supplement(d: DealState, player_index: integer): DealState, 
    d.last_draw_was_supplement = true
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true
+   d.players[player_index].last_drawn_tile_id = dr.tile.tile_id
    local cmds = fx_runner.dispatch_after_draw(d, player_index, dr.tile, true)
    fx_runner.apply_commands(d, cmds)
    return d, false
@@ -578,6 +580,7 @@ local function build_initial_deal(rng: RngState, dealer_extra: integer): DealSta
          known_wall_tile_ids        = {},
          concealed_pung_kinds_seen  = {},
          turn_extra_discards_owed   = 0,
+         last_drawn_tile_id         = "" as TileId,
       }
    end
 
@@ -783,6 +786,7 @@ local function handle_draw(deal: DealState, action: DrawAction): DealTransition
    d.last_draw_was_supplement = false
    d.last_drawn_tile_id       = dr.tile.tile_id
    d.has_last_drawn           = true
+   d.players[action.player_index].last_drawn_tile_id = dr.tile.tile_id
    d.phase                    = "awaiting_action" as DealPhase
    -- Reset bonus-discard counter at turn start (defensive: voids any owed
    -- count left stale by a prior turn ending via call-cuts-in).
