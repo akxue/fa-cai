@@ -128,6 +128,19 @@ global record DealLifecycleEvent
    event_name: EventName     -- "on_deal_start" | "on_deal_end"
 end
 
+-- Fires when the player commits a SpendBoonTokenAction. The engine validates
+-- phase + boon-active + token-available, then emits this event. The boon's
+-- own listener is responsible for (1) re-validating params (the engine
+-- treats them opaquely), (2) calling ctx:spend_token to deduct, and (3)
+-- running the spend's effect via primitives. If the listener decides the
+-- spend is invalid it must NOT call spend_token — the token stays.
+global record TokenSpendEvent
+   event_name: EventName             -- "on_token_spent"
+   boon_id:    string
+   token_kind: string
+   params:     {string: string}
+end
+
 -- ── Boon record (catalog entry) ───────────────────────────────────────────
 --
 -- A boon is a pure data record. Effects mutate state only through the

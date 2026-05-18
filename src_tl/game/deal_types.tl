@@ -275,6 +275,21 @@ global record PickBoonOfferAction
    boon_id:      string   -- must be one of deal.pending_offer
 end
 
+-- Player-initiated spend of a token on one of their active boons (D012).
+-- The engine validates phase + token availability, emits on_token_spent for
+-- the boon's own listener to consume; the listener is responsible for
+-- validating params and running the spend's effect. Tokens are deducted
+-- by the listener via ctx:spend_token — engine never deducts. This keeps
+-- spend semantics in the boon's effect function, consistent with the
+-- event-listener architecture (no new "abilities" field on Boon).
+global record SpendBoonTokenAction
+   kind:         string   -- "spend_boon_token"
+   player_index: integer
+   boon_id:      string   -- must match an active boon for player_index
+   token_kind:   string   -- e.g. "cleanse_charge", "mulligan", "peek"
+   params:       {string: string}   -- boon-specific (e.g. "tile_id" for cleanse)
+end
+
 -- ── Events ────────────────────────────────────────────────────────────────
 
 global record DealEvent
