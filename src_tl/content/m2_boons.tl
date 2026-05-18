@@ -300,6 +300,55 @@ local function effect_closed_eye(ctx: BoonContext, ev: EventData)
    end
 end
 
+-- Honor Hunt (set_2 / set_3 flex, honor): every 4 of your honor-tile
+-- draws, on your next turn take an extra wall tile (matched discard
+-- per P8 enforced by the engine). No cap.
+--
+-- State (on the ActiveBoon):
+--   counters["honor_draws"]         — running total of honor draws this deal
+--   counters["pending_extra_draws"] — number of bonus draws owed on future turns
+--
+-- Timing: counter increments on on_honor_drawn (derived event fires AFTER
+-- on_player_draw — see emit_player_draw_derived in deal_engine.tl). So
+-- the bonus draw is taken at the START of the FOLLOWING turn's
+-- on_player_draw, which is the "on your next turn" semantic the spec
+-- describes. Multiple owed draws stack and drain one per turn.
+local function effect_honor_hunt(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name == "on_player_draw" then
+      local owed = ctx:get_counter("pending_extra_draws")
+      if owed <= 0 then return end
+      if #ctx.deal.wall.tiles == 0 then return end   -- wall exhausted
+      ctx:set_counter("pending_extra_draws", owed - 1)
+      ctx:extra_draw()
+      return
+   end
+   if name == "on_honor_drawn" then
+      local n = ctx:get_counter("honor_draws") + 1
+      ctx:set_counter("honor_draws", n)
+      if n % 4 == 0 then
+         ctx:set_counter("pending_extra_draws",
+            ctx:get_counter("pending_extra_draws") + 1)
+      end
+   end
+end
+
+-- Honor Heart (set_3, honor): every honor peng or kong you complete,
+-- take the next wall tile as a free extra draw (matched discard per P8
+-- enforced by the engine). No cap.
+--
+-- Triggers on the player's own call events when the called tile is an
+-- honor kind. Concealed kong (on_ankan) qualifies too — any 3-or-4 of
+-- an honor that becomes a declared set fires. Chi cannot form on honors
+-- in HK so on_chi never qualifies; filtering by HONOR_KINDS is enough.
+local function effect_honor_heart(ctx: BoonContext, ev: EventData)
+   local call_ev = ev as CallEvent
+   if #call_ev.tile_set.tiles == 0 then return end
+   if not HONOR_KINDS[call_ev.tile_set.tiles[1].kind_id as string] then return end
+   if #ctx.deal.wall.tiles == 0 then return end
+   ctx:extra_draw()
+end
+
 -- Pure Path (starter, suit): at deal start, auto-pick the player's
 -- dominant suit (most-numerous in starting hand, ties tiao>wan>bing)
 -- and snapshot the opponent dominant-suit counts. Plan §473 calls for
@@ -546,6 +595,30 @@ local BOONS: {Boon} = {
       listens             = {"on_ting_reached", "on_player_draw"},
       condition           = always_true,
       effect              = effect_honor_sanctum,
+   },
+   {
+      id                  = "honor_hunt",
+      cluster             = "honor",
+      name                = "Honor Hunt",
+      description         = "Every 4 of your honor-tile draws, on your next turn take an extra wall tile.",
+      eligible_milestones = {"set_2", "set_3"},
+      effect_kind         = "extra_draw",
+      weight              = 1.0,
+      listens             = {"on_honor_drawn", "on_player_draw"},
+      condition           = always_true,
+      effect              = effect_honor_hunt,
+   },
+   {
+      id                  = "honor_heart",
+      cluster             = "honor",
+      name                = "Honor Heart",
+      description         = "Every honor peng or kong you complete, take the next wall tile as a free extra draw.",
+      eligible_milestones = {"set_3"},
+      effect_kind         = "extra_draw",
+      weight              = 1.0,
+      listens             = {"on_peng", "on_kong", "on_ankan"},
+      condition           = always_true,
+      effect              = effect_honor_heart,
    },
 
    -- Suit cluster
