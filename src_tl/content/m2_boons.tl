@@ -508,6 +508,32 @@ local function effect_suit_bind(ctx: BoonContext, ev: EventData)
    ctx:extra_draw()
 end
 
+-- Suit Beacon (set_3, suit): every dominant-suit chi you complete, take
+-- the next wall tile as a free extra draw. Triggers on on_chi when the
+-- chi's suit matches the player's dominant suit. No cap — fires every
+-- time. Chi can only form on suited tiles in HK, so the suit-match
+-- comparison is well-defined for any on_chi event.
+--
+-- Note: by the time on_chi fires, the chi has been added to hand.sets,
+-- so dominant_suit_of_hand naturally includes its tiles. This biases
+-- dominance toward the just-formed chi's suit, but matches the intent:
+-- "this chi reinforces my suit commitment, take a bonus tile."
+local function effect_suit_beacon(ctx: BoonContext, ev: EventData)
+   local call_ev = ev as CallEvent
+   if #call_ev.tile_set.tiles == 0 then return end
+   local chi_kind = call_ev.tile_set.tiles[1].kind_id as string
+   -- Identify the chi's suit prefix.
+   local chi_suit: string = ""
+   for _, p in ipairs(SUITED_PREFIXES) do
+      if chi_kind:sub(1, #p) == p then chi_suit = p; break end
+   end
+   if chi_suit == "" then return end   -- defensive; chi only forms on suits
+   local dom = dominant_suit_of_hand(ctx.deal.players[ctx.player_index].hand)
+   if chi_suit ~= dom then return end
+   if #ctx.deal.wall.tiles == 0 then return end
+   ctx:extra_draw()
+end
+
 -- Cleanse (set_1 / set_2 flex, suit): once-per-deal swap of an off-suit
 -- hand tile for the next wall tile. Modeled as a token-spend (Plan A):
 --   on_deal_start AND on_boon_acquired → grant 1 "cleanse_charge" token
@@ -803,6 +829,18 @@ local BOONS: {Boon} = {
       listens             = {"on_deal_start", "on_boon_acquired", "on_token_spent"},
       condition           = always_true,
       effect              = effect_suit_bind,
+   },
+   {
+      id                  = "suit_beacon",
+      cluster             = "suit",
+      name                = "Suit Beacon",
+      description         = "Every dominant-suit chi you complete, take the next wall tile as a free extra draw.",
+      eligible_milestones = {"set_3"},
+      effect_kind         = "extra_draw",
+      weight              = 1.0,
+      listens             = {"on_chi"},
+      condition           = always_true,
+      effect              = effect_suit_beacon,
    },
 
    -- Concealed cluster
