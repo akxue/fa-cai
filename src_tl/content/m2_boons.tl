@@ -12,6 +12,11 @@ require("core.types")
 require("game.deal_types")
 require("effects.boon_types")
 
+-- Plan C wait-shape query used by Suit Sentry (and future Sacred Eye).
+-- Pure game helper with no engine state side effects; safe import from
+-- content/ — same precedent as game.deal_types.
+local validator = require("game.hand_validator")
+
 local M = {}
 
 -- A no-op effect placeholder. Replaced with real behavior in S04 per the
@@ -386,6 +391,38 @@ local function effect_pure_vision(ctx: BoonContext, _ev: EventData)
       count_suit_in_tiles(ctx.deal.wall.tiles, suit))
 end
 
+-- Suit Sentry (ting, suit): when you reach ting on a "pure dominant-
+-- suit wait" (every completing tile kind is in the dominant suit), peek
+-- 1 wall tile each turn for the rest of the deal. Two-phase latch
+-- pattern (same shape as Honor Sanctum / Closed Eye), keyed off Plan C's
+-- compute_waits + a suit-membership check.
+--
+-- Wait shape is computed once at on_ting_reached. If the player later
+-- breaks ting and re-reaches it on a different wait, this boon stays
+-- latched (per the boon's "rest of the deal" language). That mirrors
+-- Honor Sanctum's behavior.
+local function effect_suit_sentry(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name == "on_ting_reached" then
+      local hand = ctx.deal.players[ctx.player_index].hand
+      local dom = dominant_suit_of_hand(hand)
+      local waits = validator.compute_waits(hand.concealed_tiles, hand.sets)
+      if #waits == 0 then return end   -- defensive: shouldn't happen at ting
+      local all_dominant = true
+      for _, k in ipairs(waits) do
+         local ks = k as string
+         if ks:sub(1, #dom) ~= dom then all_dominant = false; break end
+      end
+      if all_dominant then
+         ctx:set_flag("active", true)
+      end
+   elseif name == "on_player_draw" then
+      if ctx:get_flag("active") then
+         mark_wall_known(ctx.deal.players[ctx.player_index], ctx:peek_wall(1))
+      end
+   end
+end
+
 -- Cleanse (set_1 / set_2 flex, suit): once-per-deal swap of an off-suit
 -- hand tile for the next wall tile. Modeled as a token-spend (Plan A):
 --   on_deal_start AND on_boon_acquired → grant 1 "cleanse_charge" token
@@ -657,6 +694,18 @@ local BOONS: {Boon} = {
       listens             = {"on_deal_start", "on_boon_acquired", "on_token_spent"},
       condition           = always_true,
       effect              = effect_cleanse,
+   },
+   {
+      id                  = "suit_sentry",
+      cluster             = "suit",
+      name                = "Suit Sentry",
+      description         = "When you reach ting on a pure dominant-suit wait, peek 1 wall tile each turn for the rest of the deal.",
+      eligible_milestones = {"ting"},
+      effect_kind         = "peek",
+      weight              = 1.0,
+      listens             = {"on_ting_reached", "on_player_draw"},
+      condition           = always_true,
+      effect              = effect_suit_sentry,
    },
 
    -- Concealed cluster
