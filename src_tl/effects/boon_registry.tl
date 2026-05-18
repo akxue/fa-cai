@@ -102,14 +102,20 @@ function M.eligible_token_spends(actives: {ActiveBoon}): {EligibleSpend}
    local out: {EligibleSpend} = {}
    for _, active in ipairs(actives) do
       if catalog[active.boon_id] ~= nil then
+         -- Sort token kinds before emitting so the result is deterministic
+         -- (Lua's pairs() iteration order is unspecified, which would
+         -- otherwise produce shuffled UI hints across runs).
+         local kinds: {string} = {}
          for token_kind, count in pairs(active.tokens) do
-            if count > 0 then
-               out[#out + 1] = {
-                  boon_id    = active.boon_id,
-                  token_kind = token_kind,
-                  count      = count,
-               }
-            end
+            if count > 0 then kinds[#kinds + 1] = token_kind end
+         end
+         table.sort(kinds)
+         for _, token_kind in ipairs(kinds) do
+            out[#out + 1] = {
+               boon_id    = active.boon_id,
+               token_kind = token_kind,
+               count      = active.tokens[token_kind],
+            }
          end
       end
    end

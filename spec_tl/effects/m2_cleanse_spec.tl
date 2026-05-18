@@ -179,6 +179,87 @@ describe("M2 boon: cleanse", function()
       assert.is_true(r.ok, r.error)
       assert.are.equal(0, r.deal.active_boons[1].tokens["cleanse_charge"])
    end)
+
+   it("rejects a spend when tile_id is not in the player's concealed hand", function()
+      local deal = make_deal(tiao_dominant_hand(), tiles({{"tiao_5_b","tiao_5"}}))
+      local active = context.new_active("cleanse", "set_1" as AcquisitionPoint)
+      active.tokens["cleanse_charge"] = 1
+      deal.active_boons[#deal.active_boons + 1] = active
+      local r = engine.apply_action(deal, engine.spend_boon_token(
+         1, "cleanse", "cleanse_charge", { tile_id = "wan_9_z" }))
+      assert.is_true(r.ok, r.error)
+      assert.are.equal(1, r.deal.active_boons[1].tokens["cleanse_charge"])
+   end)
+
+   it("rejects a spend when the wall is empty (no draw possible)", function()
+      local deal = make_deal(tiao_dominant_hand(), {})   -- empty wall
+      local active = context.new_active("cleanse", "set_1" as AcquisitionPoint)
+      active.tokens["cleanse_charge"] = 1
+      deal.active_boons[#deal.active_boons + 1] = active
+      local r = engine.apply_action(deal, engine.spend_boon_token(
+         1, "cleanse", "cleanse_charge", { tile_id = "wan_1_a" }))
+      assert.is_true(r.ok, r.error)
+      -- Listener early-returned; token preserved, no crash.
+      assert.are.equal(1, r.deal.active_boons[1].tokens["cleanse_charge"])
+   end)
+end)
+
+-- ── Mid-deal acquisition via fork pick ────────────────────────────────────
+
+describe("M2 boon: cleanse mid-deal acquisition", function()
+   local notation = require("support.hand_notation")
+
+   before_each(function()
+      registry.reset()
+      m2_boons.register_all()
+   end)
+
+   it("grants cleanse_charge token when cleanse is picked at a set_1 fork", function()
+      -- Concealed hand that crosses set_1 on a discard: east pung + 11
+      -- fillers + 1 discard target. Same scaffold as fork_offer_flow_spec.
+      local parse = function(s: string): {Tile}
+         local r = notation.parse(s)
+         assert.is_true(r.ok, "notation error: " .. r.error)
+         return r.tiles
+      end
+      local _ = parse   -- mark used
+      local concealed = tiles({
+         {"east_a","east"}, {"east_b","east"}, {"east_c","east"},
+         {"south_a","south"}, {"west_a","west"}, {"north_a","north"},
+         {"fa_cai_a","fa_cai"}, {"hong_zhong_a","hong_zhong"}, {"bai_ban_a","bai_ban"},
+         {"tiao_5_a","tiao_5"}, {"wan_5_a","wan_5"}, {"bing_5_a","bing_5"},
+         {"tiao_9_a","tiao_9"}, {"wan_1_a","wan_1"},
+      })
+      local deal = make_deal(concealed, {})
+
+      local tr_disc = engine.apply_action(deal, engine.discard(1, "wan_1_a" as TileId))
+      assert.is_true(tr_disc.ok, tr_disc.error)
+      -- An offer was materialized; find cleanse in the pool if present, or
+      -- materialize a deal where cleanse is the only set_1 option. Simpler:
+      -- directly invoke handle_pick_boon_offer with cleanse if it's in the
+      -- pool; otherwise re-seed.
+      local d = tr_disc.deal
+      local in_offer = false
+      for _, id in ipairs(d.pending_offer) do
+         if id == "cleanse" then in_offer = true; break end
+      end
+      if not in_offer then
+         -- Force cleanse into the offer for this test (the deterministic
+         -- compose may not have picked it). Replace the first entry.
+         d.pending_offer[1] = "cleanse"
+      end
+
+      local tr_pick = engine.apply_action(d, engine.pick_boon_offer(1, "cleanse"))
+      assert.is_true(tr_pick.ok, tr_pick.error)
+
+      -- Find the newly-acquired cleanse and assert it has the token.
+      local found: ActiveBoon = nil
+      for _, b in ipairs(tr_pick.deal.active_boons) do
+         if b.boon_id == "cleanse" then found = b; break end
+      end
+      assert.is_not_nil(found)
+      assert.are.equal(1, found.tokens["cleanse_charge"])
+   end)
 end)
 
 -- ── Engine action surface ────────────────────────────────────────────────

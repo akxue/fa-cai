@@ -134,11 +134,28 @@ end
 -- treats them opaquely), (2) calling ctx:spend_token to deduct, and (3)
 -- running the spend's effect via primitives. If the listener decides the
 -- spend is invalid it must NOT call spend_token — the token stays.
+--
+-- IMPORTANT: every listener for on_token_spent MUST filter on
+-- spend.boon_id == its own boon id before doing anything. The dispatch
+-- is broadcast (every listener for the event sees every spend); routing
+-- lives in the listener.
 global record TokenSpendEvent
    event_name: EventName             -- "on_token_spent"
    boon_id:    string
    token_kind: string
    params:     {string: string}
+end
+
+-- Fires when a boon is acquired mid-deal via a fork pick. on_deal_start
+-- already covers boons present at deal start (carried + starter); this
+-- event closes the gap for set_1 / set_2 / set_3 / ting picks — without
+-- it, a boon that grants resources "at acquisition" would silently never
+-- grant when picked at a fork. Listeners must filter by boon_id (same
+-- broadcast contract as on_token_spent).
+global record BoonAcquiredEvent
+   event_name: EventName             -- "on_boon_acquired"
+   boon_id:    string
+   milestone:  MilestoneId           -- the fork that produced the pick
 end
 
 -- ── Boon record (catalog entry) ───────────────────────────────────────────

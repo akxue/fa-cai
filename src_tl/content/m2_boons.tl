@@ -339,16 +339,26 @@ end
 
 -- Cleanse (set_1 / set_2 flex, suit): once-per-deal swap of an off-suit
 -- hand tile for the next wall tile. Modeled as a token-spend (Plan A):
---   on_deal_start → grant 1 "cleanse_charge" token
+--   on_deal_start AND on_boon_acquired → grant 1 "cleanse_charge" token
+--     idempotently. Cleanse is set_1/set_2-eligible (mid-deal pick), so
+--     on_boon_acquired closes the gap that on_deal_start alone leaves.
 --   on_token_spent (boon_id == "cleanse") → validate params.tile_id is
---     in the player's concealed hand and is NOT in the dominant suit;
---     deduct token + swap.
+--     in the player's concealed hand and is NOT in the dominant suit AND
+--     the wall has a tile; deduct token + swap.
 -- Off-suit means: not in the auto-picked dominant suit (honors qualify
 -- as off-suit). Dominant is recomputed from the current hand at spend
 -- time — same auto-pick pattern as pure_path/pure_vision.
 local function effect_cleanse(ctx: BoonContext, ev: EventData)
    local name = ev.event_name as string
    if name == "on_deal_start" then
+      if ctx:get_tokens("cleanse_charge") == 0 then
+         ctx:grant_token("cleanse_charge", 1)
+      end
+      return
+   end
+   if name == "on_boon_acquired" then
+      local acq = ev as BoonAcquiredEvent
+      if acq.boon_id ~= "cleanse" then return end
       if ctx:get_tokens("cleanse_charge") == 0 then
          ctx:grant_token("cleanse_charge", 1)
       end
@@ -375,6 +385,7 @@ local function effect_cleanse(ctx: BoonContext, ev: EventData)
 
    local dom = dominant_suit_of_hand(hand)
    if target_kind:sub(1, #dom) == dom then return end   -- tile IS dominant; not off-suit
+   if #ctx.deal.wall.tiles == 0 then return end          -- wall empty; can't draw replacement
 
    if not ctx:spend_token("cleanse_charge", 1) then return end
    ctx:swap_hand_for_wall(tile_id)
@@ -489,7 +500,7 @@ local BOONS: {Boon} = {
       eligible_milestones = {"set_1", "set_2"},
       effect_kind         = "swap",
       weight              = 1.0,
-      listens             = {"on_deal_start", "on_token_spent"},
+      listens             = {"on_deal_start", "on_boon_acquired", "on_token_spent"},
       condition           = always_true,
       effect              = effect_cleanse,
    },

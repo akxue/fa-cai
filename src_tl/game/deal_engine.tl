@@ -1565,12 +1565,26 @@ local function handle_pick_boon_offer(deal: DealState, action: PickBoonOfferActi
    end
 
    local d = copy_deal(deal)
+   local picked_milestone = d.pending_offer_milestone
    local ok = boon_offer.accept_offer(d, d.pending_offer, d.pending_offer_milestone, action.boon_id)
    if not ok then
       return err(deal, "pick_boon_offer: accept_offer rejected the pick (internal)")
    end
    d.pending_offer           = {}
    d.pending_offer_milestone = "" as MilestoneId
+
+   -- Fire on_boon_acquired so boons that grant resources at acquisition
+   -- (Cleanse's cleanse_charge, etc.) initialize correctly even when
+   -- picked mid-deal — on_deal_start has already fired by this point.
+   -- Boons present at deal_start still get their on_deal_start path; this
+   -- event only fires for fork picks. Listeners must filter by boon_id.
+   local ev_acquired: BoonAcquiredEvent = {
+      event_name = "on_boon_acquired",
+      boon_id    = action.boon_id,
+      milestone  = picked_milestone,
+   }
+   emit_event(d, ev_acquired as EventData)
+
    materialize_next_offer(d)
 
    return ok_t(d, { ev("boon_picked", "player picked " .. action.boon_id) })
