@@ -391,6 +391,87 @@ local function effect_cleanse(ctx: BoonContext, ev: EventData)
    ctx:swap_hand_for_wall(tile_id)
 end
 
+-- Honor encoding for honors_gift's "marked honor" counter. Mirrors the
+-- SUIT_TO_IDX / IDX_TO_SUIT pattern: integer-encoded so the chosen kind
+-- can ride on the ActiveBoon's integer counters map. Canonical order is
+-- winds then dragons: east > south > west > north > fa_cai > hong_zhong > bai_ban.
+local HONOR_ORDER: {string} = {
+   "east", "south", "west", "north", "fa_cai", "hong_zhong", "bai_ban",
+}
+local HONOR_TO_IDX: {string: integer} = {}
+local IDX_TO_HONOR: {integer: string} = {}
+for i, k in ipairs(HONOR_ORDER) do
+   HONOR_TO_IDX[k] = i
+   IDX_TO_HONOR[i] = k
+end
+
+-- Returns the player's most-numerous honor across concealed + sets. Ties
+-- broken canonically (HONOR_ORDER). Returns "" when the hand has no
+-- honors at all — the boon stores 0 in that case and never recomputes
+-- (marked honor is latched at deal start).
+local function marked_honor_of_hand(hand: PlayerHand): string
+   local counts: {string: integer} = {}
+   for _, t in ipairs(hand.concealed_tiles) do
+      local k = t.kind_id as string
+      if HONOR_KINDS[k] then counts[k] = (counts[k] or 0) + 1 end
+   end
+   for _, s in ipairs(hand.sets) do
+      for _, t in ipairs(s.tiles) do
+         local k = t.kind_id as string
+         if HONOR_KINDS[k] then counts[k] = (counts[k] or 0) + 1 end
+      end
+   end
+   local best_kind: string = ""
+   local best_count = 0
+   for _, k in ipairs(HONOR_ORDER) do   -- canonical iteration for tie-break
+      local c = counts[k] or 0
+      if c > best_count then
+         best_kind  = k
+         best_count = c
+      end
+   end
+   return best_kind
+end
+
+-- Honor's Gift (starter, honor): at deal start, auto-pick the player's
+-- most-numerous honor (ties: east > south > west > north > dragons in
+-- canonical order). Thereafter, recompute the wall's live count of that
+-- marked honor on every on_player_draw so the UI/debug surface can
+-- display "N remaining". Plan §460 envisions a player prompt to choose
+-- the honor; the auto-pick is a defensible default until prompt UI ships.
+--
+-- Stored state (on the ActiveBoon):
+--   counters["marked_honor_idx"]   — 1..7 per HONOR_ORDER, or 0 if hand had no honors
+--   counters["wall_marked_count"]  — live count of marked honor in wall
+local function effect_honors_gift(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   local hand = ctx.deal.players[ctx.player_index].hand
+   if name == "on_deal_start" then
+      local kind = marked_honor_of_hand(hand)
+      ctx:set_counter("marked_honor_idx", HONOR_TO_IDX[kind] or 0)
+      -- Initial wall count for the marked honor, so UI has a value before
+      -- the first draw fires the recomputation listener below.
+      if kind ~= "" then
+         local n = 0
+         for _, t in ipairs(ctx.deal.wall.tiles) do
+            if (t.kind_id as string) == kind then n = n + 1 end
+         end
+         ctx:set_counter("wall_marked_count", n)
+      end
+      return
+   end
+   if name ~= "on_player_draw" then return end
+   local idx = ctx:get_counter("marked_honor_idx")
+   if idx == 0 then return end   -- no honors at deal start; nothing to track
+   local kind = IDX_TO_HONOR[idx] or ""
+   if kind == "" then return end
+   local n = 0
+   for _, t in ipairs(ctx.deal.wall.tiles) do
+      if (t.kind_id as string) == kind then n = n + 1 end
+   end
+   ctx:set_counter("wall_marked_count", n)
+end
+
 -- Hidden Strength (set_2, concealed): every concealed pung formed (3rd
 -- matching tile present in concealed_tiles at end-of-turn), peek 3 wall
 -- tiles. The engine fires on_concealed_pung_formed once per distinct
@@ -414,9 +495,9 @@ local BOONS: {Boon} = {
       eligible_milestones = {"starter"},
       effect_kind         = "info",
       weight              = 1.0,
-      listens             = {"on_deal_start"},
+      listens             = {"on_deal_start", "on_player_draw"},
       condition           = always_true,
-      effect              = noop_effect,
+      effect              = effect_honors_gift,
    },
    {
       id                  = "honors_eye",
