@@ -423,6 +423,91 @@ local function effect_suit_sentry(ctx: BoonContext, ev: EventData)
    end
 end
 
+-- Concealed Mulligan (set_1 / set_2 flex, concealed): once-per-deal,
+-- if the player has made no calls yet, discard the drawn tile and take
+-- the next wall tile. Modeled as a token-spend (Plan A) with a no-call
+-- gate flag.
+--
+--   on_deal_start AND on_boon_acquired → grant 1 "mulligan_charge"
+--     token idempotently
+--   on_chi / on_peng / on_kong / on_ankan (player's calls) → latch
+--     "disqualified" flag; further spends are inert
+--   on_token_spent (boon_id == "concealed_mulligan") → if not
+--     disqualified and the wall has a tile, deduct + discard_and_redraw
+local function effect_concealed_mulligan(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name == "on_deal_start" then
+      if ctx:get_tokens("mulligan_charge") == 0 then
+         ctx:grant_token("mulligan_charge", 1)
+      end
+      return
+   end
+   if name == "on_boon_acquired" then
+      local acq = ev as BoonAcquiredEvent
+      if acq.boon_id ~= "concealed_mulligan" then return end
+      if ctx:get_tokens("mulligan_charge") == 0 then
+         ctx:grant_token("mulligan_charge", 1)
+      end
+      return
+   end
+   if is_player_call_event(name) then
+      ctx:set_flag("disqualified", true)
+      return
+   end
+   if name ~= "on_token_spent" then return end
+   local spend = ev as TokenSpendEvent
+   if spend.boon_id ~= "concealed_mulligan" then return end
+   if spend.token_kind ~= "mulligan_charge" then return end
+   if ctx:get_flag("disqualified") then return end
+   if #ctx.deal.wall.tiles == 0 then return end
+   local hand = ctx.deal.players[ctx.player_index].hand
+   if #hand.concealed_tiles == 0 then return end
+   if not ctx:spend_token("mulligan_charge", 1) then return end
+   ctx:discard_and_redraw()
+end
+
+-- Suit Bind (set_3, suit): once-per-deal, when you have ≥7 dominant-suit
+-- tiles in hand (concealed + sets), draw 2 wall tiles instead of 1, then
+-- discard 2. The "draw 2" is implemented via extra_draw twice (Plan B
+-- handles the matched-discard turn extension); the player picks 2
+-- discards normally as turn_extra_discards_owed drains to 0.
+--
+--   on_deal_start AND on_boon_acquired → grant 1 "bind_charge" token
+--   on_token_spent (boon_id == "suit_bind") → if dominant count ≥ 7
+--     and wall has ≥2 tiles, deduct + extra_draw x2
+local function effect_suit_bind(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name == "on_deal_start" then
+      if ctx:get_tokens("bind_charge") == 0 then
+         ctx:grant_token("bind_charge", 1)
+      end
+      return
+   end
+   if name == "on_boon_acquired" then
+      local acq = ev as BoonAcquiredEvent
+      if acq.boon_id ~= "suit_bind" then return end
+      if ctx:get_tokens("bind_charge") == 0 then
+         ctx:grant_token("bind_charge", 1)
+      end
+      return
+   end
+   if name ~= "on_token_spent" then return end
+   local spend = ev as TokenSpendEvent
+   if spend.boon_id ~= "suit_bind" then return end
+   if spend.token_kind ~= "bind_charge" then return end
+   if #ctx.deal.wall.tiles < 2 then return end   -- need 2 tiles for the double draw
+   local hand = ctx.deal.players[ctx.player_index].hand
+   local dom = dominant_suit_of_hand(hand)
+   local dom_count = count_suit_in_tiles(hand.concealed_tiles, dom)
+   for _, s in ipairs(hand.sets) do
+      dom_count = dom_count + count_suit_in_tiles(s.tiles, dom)
+   end
+   if dom_count < 7 then return end
+   if not ctx:spend_token("bind_charge", 1) then return end
+   ctx:extra_draw()
+   ctx:extra_draw()
+end
+
 -- Cleanse (set_1 / set_2 flex, suit): once-per-deal swap of an off-suit
 -- hand tile for the next wall tile. Modeled as a token-spend (Plan A):
 --   on_deal_start AND on_boon_acquired → grant 1 "cleanse_charge" token
@@ -707,6 +792,18 @@ local BOONS: {Boon} = {
       condition           = always_true,
       effect              = effect_suit_sentry,
    },
+   {
+      id                  = "suit_bind",
+      cluster             = "suit",
+      name                = "Suit Bind",
+      description         = "Once per deal, when you have ≥7 dominant-suit tiles, draw 2 wall tiles then discard 2.",
+      eligible_milestones = {"set_3"},
+      effect_kind         = "extra_draw",
+      weight              = 1.0,
+      listens             = {"on_deal_start", "on_boon_acquired", "on_token_spent"},
+      condition           = always_true,
+      effect              = effect_suit_bind,
+   },
 
    -- Concealed cluster
    {
@@ -720,6 +817,19 @@ local BOONS: {Boon} = {
       listens             = {"on_deal_start"},
       condition           = always_true,
       effect              = effect_hidden_path,
+   },
+   {
+      id                  = "concealed_mulligan",
+      cluster             = "concealed",
+      name                = "Concealed Mulligan",
+      description         = "Once per deal, if you have made no calls, discard the drawn tile and take the next wall tile.",
+      eligible_milestones = {"set_1", "set_2"},
+      effect_kind         = "mulligan",
+      weight              = 1.0,
+      listens             = {"on_deal_start", "on_boon_acquired", "on_token_spent",
+                             "on_chi", "on_peng", "on_kong", "on_ankan"},
+      condition           = always_true,
+      effect              = effect_concealed_mulligan,
    },
    {
       id                  = "silent_march",
