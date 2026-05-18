@@ -742,6 +742,17 @@ function M.pick_boon_offer(player_index: integer, boon_id: string): DealAction
    return a as DealAction
 end
 
+function M.spend_boon_token(player_index: integer, boon_id: string, token_kind: string, params: {string:string}): DealAction
+   local a: SpendBoonTokenAction = {
+      kind         = "spend_boon_token",
+      player_index = player_index,
+      boon_id      = boon_id,
+      token_kind   = token_kind,
+      params       = params or {},
+   }
+   return a as DealAction
+end
+
 -- ── Draw ──────────────────────────────────────────────────────────────────
 
 local function handle_draw(deal: DealState, action: DrawAction): DealTransition
@@ -1554,15 +1565,72 @@ local function handle_pick_boon_offer(deal: DealState, action: PickBoonOfferActi
    end
 
    local d = copy_deal(deal)
+   local picked_milestone = d.pending_offer_milestone
    local ok = boon_offer.accept_offer(d, d.pending_offer, d.pending_offer_milestone, action.boon_id)
    if not ok then
       return err(deal, "pick_boon_offer: accept_offer rejected the pick (internal)")
    end
    d.pending_offer           = {}
    d.pending_offer_milestone = "" as MilestoneId
+
+   -- Fire on_boon_acquired so boons that grant resources at acquisition
+   -- (Cleanse's cleanse_charge, etc.) initialize correctly even when
+   -- picked mid-deal — on_deal_start has already fired by this point.
+   -- Boons present at deal_start still get their on_deal_start path; this
+   -- event only fires for fork picks. Listeners must filter by boon_id.
+   local ev_acquired: BoonAcquiredEvent = {
+      event_name = "on_boon_acquired",
+      boon_id    = action.boon_id,
+      milestone  = picked_milestone,
+   }
+   emit_event(d, ev_acquired as EventData)
+
    materialize_next_offer(d)
 
    return ok_t(d, { ev("boon_picked", "player picked " .. action.boon_id) })
+end
+
+-- Player-initiated token spend. Validates phase (must be the player's own
+-- awaiting_action turn, no pending offer materialized), boon-active, and
+-- token-available — then emits on_token_spent so the boon's own listener
+-- can validate params + deduct via spend_token + run the spend's effect.
+-- The engine never deducts the token directly; the listener owns that.
+local function handle_spend_boon_token(deal: DealState, action: SpendBoonTokenAction): DealTransition
+   if action.player_index ~= PLAYER_OWNER_INDEX then
+      return err(deal, "spend_boon_token: only the boon owner (player 1) may spend")
+   end
+   if (deal.phase as string) ~= "awaiting_action" then
+      return err(deal, "spend_boon_token: requires awaiting_action phase, got " .. (deal.phase as string))
+   end
+   if deal.current_player ~= action.player_index then
+      return err(deal, "spend_boon_token: not the player's turn")
+   end
+   if #deal.pending_offer > 0 then
+      return err(deal, "spend_boon_token: must resolve pending boon offer first")
+   end
+
+   local matched_boon: ActiveBoon = nil
+   for _, b in ipairs(deal.active_boons) do
+      if b.boon_id == action.boon_id then matched_boon = b; break end
+   end
+   if matched_boon == nil then
+      return err(deal, "spend_boon_token: boon not active: " .. action.boon_id)
+   end
+   local have = matched_boon.tokens[action.token_kind] or 0
+   if have <= 0 then
+      return err(deal, "spend_boon_token: no " .. action.token_kind .. " token to spend on " .. action.boon_id)
+   end
+
+   local d = copy_deal(deal)
+   local ev_spend: TokenSpendEvent = {
+      event_name = "on_token_spent",
+      boon_id    = action.boon_id,
+      token_kind = action.token_kind,
+      params     = action.params,
+   }
+   emit_event(d, ev_spend as EventData)
+
+   return ok_t(d, { ev("token_spent", "player spent " .. action.token_kind .. " on " .. action.boon_id) })
 end
 
 local function handle_confirm_opening(deal: DealState, action: ConfirmOpeningAction): DealTransition
@@ -1678,6 +1746,8 @@ function M.apply_action(deal: DealState, action: DealAction): DealTransition
       return handle_use_effect_action(deal, action as UseEffectAction)
    elseif kind == "pick_boon_offer" then
       return handle_pick_boon_offer(deal, action as PickBoonOfferAction)
+   elseif kind == "spend_boon_token" then
+      return handle_spend_boon_token(deal, action as SpendBoonTokenAction)
    else
       return err(deal, "apply_action: unknown action kind: " .. kind)
    end

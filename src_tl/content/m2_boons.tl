@@ -337,6 +337,60 @@ local function effect_pure_vision(ctx: BoonContext, _ev: EventData)
       count_suit_in_tiles(ctx.deal.wall.tiles, suit))
 end
 
+-- Cleanse (set_1 / set_2 flex, suit): once-per-deal swap of an off-suit
+-- hand tile for the next wall tile. Modeled as a token-spend (Plan A):
+--   on_deal_start AND on_boon_acquired → grant 1 "cleanse_charge" token
+--     idempotently. Cleanse is set_1/set_2-eligible (mid-deal pick), so
+--     on_boon_acquired closes the gap that on_deal_start alone leaves.
+--   on_token_spent (boon_id == "cleanse") → validate params.tile_id is
+--     in the player's concealed hand and is NOT in the dominant suit AND
+--     the wall has a tile; deduct token + swap.
+-- Off-suit means: not in the auto-picked dominant suit (honors qualify
+-- as off-suit). Dominant is recomputed from the current hand at spend
+-- time — same auto-pick pattern as pure_path/pure_vision.
+local function effect_cleanse(ctx: BoonContext, ev: EventData)
+   local name = ev.event_name as string
+   if name == "on_deal_start" then
+      if ctx:get_tokens("cleanse_charge") == 0 then
+         ctx:grant_token("cleanse_charge", 1)
+      end
+      return
+   end
+   if name == "on_boon_acquired" then
+      local acq = ev as BoonAcquiredEvent
+      if acq.boon_id ~= "cleanse" then return end
+      if ctx:get_tokens("cleanse_charge") == 0 then
+         ctx:grant_token("cleanse_charge", 1)
+      end
+      return
+   end
+   if name ~= "on_token_spent" then return end
+   local spend = ev as TokenSpendEvent
+   if spend.boon_id ~= "cleanse" then return end
+   if spend.token_kind ~= "cleanse_charge" then return end
+
+   local tile_id_raw = spend.params["tile_id"]
+   if tile_id_raw == nil or tile_id_raw == "" then return end
+   local tile_id = tile_id_raw as TileId
+
+   local hand = ctx.deal.players[ctx.player_index].hand
+   local target_kind: string = ""
+   for _, t in ipairs(hand.concealed_tiles) do
+      if t.tile_id == tile_id then
+         target_kind = t.kind_id as string
+         break
+      end
+   end
+   if target_kind == "" then return end   -- tile not in hand
+
+   local dom = dominant_suit_of_hand(hand)
+   if target_kind:sub(1, #dom) == dom then return end   -- tile IS dominant; not off-suit
+   if #ctx.deal.wall.tiles == 0 then return end          -- wall empty; can't draw replacement
+
+   if not ctx:spend_token("cleanse_charge", 1) then return end
+   ctx:swap_hand_for_wall(tile_id)
+end
+
 -- Hidden Strength (set_2, concealed): every concealed pung formed (3rd
 -- matching tile present in concealed_tiles at end-of-turn), peek 3 wall
 -- tiles. The engine fires on_concealed_pung_formed once per distinct
@@ -446,9 +500,9 @@ local BOONS: {Boon} = {
       eligible_milestones = {"set_1", "set_2"},
       effect_kind         = "swap",
       weight              = 1.0,
-      listens             = {"on_player_draw"},
+      listens             = {"on_deal_start", "on_boon_acquired", "on_token_spent"},
       condition           = always_true,
-      effect              = noop_effect,
+      effect              = effect_cleanse,
    },
 
    -- Concealed cluster

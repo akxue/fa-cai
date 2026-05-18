@@ -86,4 +86,40 @@ function M.emit(deal: DealState, actives: {ActiveBoon}, player_index: integer, e
    end
 end
 
+-- One eligible spend the UI can present. Each spend is an (boon_id, token_kind)
+-- pair the player currently has at least one of. Other boon-specific
+-- preconditions (e.g. Suit Bind's "≥7 dominant in hand") are checked by the
+-- boon's own on_token_spent listener; the UI may suppress visibility too, but
+-- the engine's final word is the listener's spend_token call. Keeping this
+-- list flat (no preconditions evaluated here) keeps the query stateless.
+global record EligibleSpend
+   boon_id:    string
+   token_kind: string
+   count:      integer
+end
+
+function M.eligible_token_spends(actives: {ActiveBoon}): {EligibleSpend}
+   local out: {EligibleSpend} = {}
+   for _, active in ipairs(actives) do
+      if catalog[active.boon_id] ~= nil then
+         -- Sort token kinds before emitting so the result is deterministic
+         -- (Lua's pairs() iteration order is unspecified, which would
+         -- otherwise produce shuffled UI hints across runs).
+         local kinds: {string} = {}
+         for token_kind, count in pairs(active.tokens) do
+            if count > 0 then kinds[#kinds + 1] = token_kind end
+         end
+         table.sort(kinds)
+         for _, token_kind in ipairs(kinds) do
+            out[#out + 1] = {
+               boon_id    = active.boon_id,
+               token_kind = token_kind,
+               count      = active.tokens[token_kind],
+            }
+         end
+      end
+   end
+   return out
+end
+
 return M
